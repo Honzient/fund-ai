@@ -1,0 +1,156 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-bg font-sans text-zinc-200 antialiased;
+  }
+  select option {
+    background-color: #161b28;
+    color: #e4e4e7;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-white/5 bg-surface shadow-card;
+  }
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+  }
+  .num-mono {
+    @apply font-mono tabular-nums;
+  }
+  .markdown-body h1 {
+    font-size: 1.2rem;
+    font-weight: 700;
+    margin: 0.75rem 0 0.4rem;
+    color: #f4f4f5;
+  }
+  .markdown-body h2 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    margin: 0.7rem 0 0.35rem;
+    color: #f4f4f5;
+  }
+  .markdown-body h3 {
+    font-size: 0.98rem;
+    font-weight: 600;
+    margin: 0.6rem 0 0.3rem;
+    color: #e4e4e7;
+  }
+  .markdown-body h4 {
+    font-size: 0.92rem;
+    font-weight: 600;
+    margin: 0.5rem 0 0.25rem;
+    color: #e4e4e7;
+  }
+  .markdown-body p {
+    margin: 0.35rem 0;
+    color: #d4d4d8;
+  }
+  .markdown-body ul,
+  .markdown-body ol {
+    margin: 0.35rem 0;
+    padding-left: 1.3rem;
+  }
+  .markdown-body ul {
+    list-style: disc;
+  }
+  .markdown-body ol {
+    list-style: decimal;
+  }
+  .markdown-body li {
+    margin: 0.15rem 0;
+  }
+  .markdown-body code {
+    @apply font-mono;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    padding: 0.1em 0.35em;
+    font-size: 0.85em;
+    color: #fbbf24;
+  }
+  .markdown-body pre {
+    background: #0c1017;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 0.75rem;
+    overflow-x: auto;
+    margin: 0.5rem 0;
+  }
+  .markdown-body pre code {
+    background: transparent;
+    padding: 0;
+    color: #e5e7eb;
+    font-size: 0.82em;
+  }
+  .markdown-body blockquote {
+    border-left: 3px solid rgba(59, 130, 246, 0.5);
+    padding-left: 0.75rem;
+    color: #a1a1aa;
+    margin: 0.5rem 0;
+  }
+  .markdown-body a {
+    color: #60a5fa;
+    text-decoration: underline;
+  }
+  .markdown-body strong {
+    color: #f4f4f5;
+  }
+  .markdown-body table {
+    border-collapse: collapse;
+    margin: 0.5rem 0;
+    width: 100%;
+    font-size: 0.85rem;
+  }
+  .markdown-body th,
+  .markdown-body td {
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 0.35rem 0.6rem;
+    text-align: left;
+  }
+  .markdown-body th {
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .markdown-body hr {
+    border-color: rgba(255, 255, 255, 0.1);
+    margin: 0.75rem 0;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

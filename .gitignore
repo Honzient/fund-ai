@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+backend/.venv/
+*.db
+backend/fund.db
+backend/storage/
+backend/logs/
+.pytest_cache/
+backend/build/
+backend/dist/
+
+# Node
+node_modules/
+frontend/dist/
+.npm-cache/
+
+# 打包产物
+dist_exe/
+
+# 环境与临时
+.env
+backend/.env
+.tmp/
+
+# 工作区工具配置（非项目文件）
+coding-tools.yml
+
+# IDE
+.idea/
+.vscode/
+*.swp
