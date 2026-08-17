@@ -28,9 +28,9 @@ class LogisticModel(BaseModel):
     name = "logistic"
 
     def __init__(self) -> None:
+        # sklearn>=1.9：multinomial 为默认唯一行为，不再传 multi_class 参数
         self._model = LogisticRegression(
-            max_iter=3000, multi_class="multinomial",
-            class_weight="balanced", C=1.0, solver="lbfgs",
+            max_iter=3000, class_weight="balanced", C=1.0, solver="lbfgs",
         )
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
