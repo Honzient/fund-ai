@@ -11,14 +11,25 @@
 | 模块 | 说明 |
 | --- | --- |
 | 基金搜索 / 自选 | 按代码或名称搜索，加入自选，分组（核心基金/科技/新能源…）、置顶、删除 |
-| 行情与图表 | 最新净值 / 盘中估值（明确标注「最新可用数据」，绝不伪装实时）、交互式净值走势图（MA/MACD/RSI/BOLL/成交量、日/周/月） |
-| 量化分析 | 7 维多因子评分（趋势/波动/风险/质量/宏观/行业/情绪）0-100 分，正面/负面因素均可点击查看原始数据 |
-| 风险指标 | 最大回撤、Sharpe、Sortino、Calmar、VaR/CVaR、Beta、Alpha、跟踪误差；基金 vs 基准超额收益与相对强弱 |
-| 概率预测 | 未来 5/20/60 日 上涨/震荡/下跌概率 + 置信度 + 特征重要性；Logistic/RandomForest；TimeSeriesSplit + Walk-Forward 回测；模型版本化（v0.1、v1…），重训不覆盖历史 |
-| AI 对话 | DeepSeek 对话；**自动注入基金 Context**（基金画像/行情/指标/风险/持仓/宏观/新闻/政策/预测），用户只发一句话即可；多基金对比问答；「查看本次分析数据来源」保证透明 |
-| 新闻 / 政策 / 宏观 | 去重、情绪分析、行业映射、重要性评分；政策附带部门/类型/影响方向，来源可追溯 |
-| 定时分析 | 每天/每周/每月/自定义 cron 自动分析自选基金 → 生成 Markdown/HTML 报告 → 站内通知 + Email |
-| 数据来源 | 统一 `DataProvider` 接口：Eastmoney（天天基金公开接口）/ Mock 演示 / 自定义 JSON；缓存 + 增量同步 + 重试 + 限流 + 自动降级 |
+| 行情与图表 | 最新净值 / 盘中估值（明确标注「最新可用数据」，绝不伪装实时）、交互式净值走势图（MA/MACD/RSI/BOLL、日/周/月、基准对比） |
+| 量化分析 | 7 维多因子评分 0-100 分，正面/负面因素均可点击查看原始数据 |
+| 风险指标 | 最大回撤、Sharpe、Sortino、Calmar、VaR/CVaR、Beta、Alpha；基金 vs 基准超额收益与相对强弱 |
+| **概率预测（v0.2 重构）** | 未来 5/20/60 日 上涨/震荡/下跌概率；**Purged Walk-Forward（embargo+purge，无标签重叠泄露）**；**概率校准**（isotonic/sigmoid，样本不足自动 uncalibrated 并标注）；**完整指标**（Accuracy/BalancedAcc/F1/ROC-AUC/LogLoss/Brier/ECE/HitRate/平均前向收益）；**Baseline 对比**（momentum/majority/random/simple_trend/always_up）；**Prediction Ledger 预测台账**（每次预测持久化 + 事后自动评价 → 真实命中率）；**模型注册表 + Champion 机制**（语义版本、数据集/特征/校准版本、状态，重训不覆盖历史） |
+| **模型健康页** | Champion 信息、验证指标、基线对比、台账近 30/100 次真实命中率、healthy/warning/degraded 状态、手动重训与回测 |
+| AI 对话 | DeepSeek 对话；**自动注入基金 Context**（领域 Provider 组装 + context_hash 指纹）；多基金对比问答；「查看本次分析数据来源」保证透明；**外部数据（新闻/政策）XML 隔离防注入**；**LLM 不得修改量化数字** |
+| 新闻 / 政策 / 宏观 | 去重、情绪、行业映射、重要性评分；**数据质量（high/medium/low）+ as_of 溯源 + 陈旧检测** |
+| 定时分析 | cron 定时分析 → Markdown/HTML 报告 → 站内通知 + Email；长任务后台线程池执行，不阻塞 API |
+| 数据来源 | 统一 `DataProvider` 接口 + 领域拆分（Fund/Market/Mock/Custom）；缓存 + 增量同步 + 重试 + 限流 + 自动降级；**行业分类表（SecurityIndustry，可扩展申万/中信/GICS，未知标注 unknown）** |
+
+## 数据与预测的可信边界（重要）
+
+- **真实数据源**：天天基金/东方财富公开接口（基金搜索、净值历史、盘中估值、持仓、指数K线/快照，无需 Key）。
+  新闻/政策/宏观当前为**演示数据（Mock）**，可经 `backend/data/custom/*.json` 导入真实数据或扩展新 Provider。
+- **不是真实数据的地方会明确标注**：所有 Mock 数据 `source="mock"`，界面显示「最新可用数据」。
+- **缺失数据不会被填成 0**：特征层用 NaN + 缺失掩码；宏观/新闻/政策缺失时模型与 LLM 都被告知「数据缺失」并降低置信度。
+- **模型表现诚实展示**：Champion 由 Brier/LogLoss/BalancedAcc/HitRate/ECE 综合评分选出（非只看 Accuracy）；
+  若模型不如 momentum 基线，健康页会如实显示；近 30 次命中率显著低于验证期 → 状态 degraded 并建议重训。
+- 审计与设计文档：`docs/audit-v0.2.md`、`docs/architecture.md`、`docs/api.md`。
 
 ## 🚀 快速开始
 
@@ -136,8 +147,11 @@ cd backend
 .venv\Scripts\python -m pytest tests -v
 ```
 
-41 个用例：技术指标 / 风险指标 / 多因子 / **特征无未来数据泄露** / 预测训练与回测 / ContextBuilder /
-MockProvider / API 集成（认证、数据隔离、自选、对话、调度、密钥加密存储）。
+81 个用例，覆盖：技术/风险/多因子指标、**特征无未来数据泄露**、**Purged 切分（embargo+purge 无标签重叠）**、
+**概率校准（含样本不足降级）**、**Baseline 对比**、**Prediction Ledger（记录/去重/评价/统计）**、
+**模型注册表（语义版本/不覆盖/Champion 迁移/校准器同版本）**、**缺失特征掩码**、**数据溯源与陈旧检测**、
+**未知行业分类**、Provider fallback、**LLM 注入隔离/密钥轮换失效/context_hash/日志脱敏**、
+**跨用户数据隔离/无效 JWT**、API 集成全链路。
 
 ## 🔌 扩展新数据源 / 新 LLM
 
