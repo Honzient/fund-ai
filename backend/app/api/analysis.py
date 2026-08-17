@@ -1,4 +1,4 @@
-"""多基金分析 / 预测模型管理 / 回测接口。"""
+"""多基金分析 / 预测模型管理 / 回测 / 台账 / 模型健康接口。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -40,18 +40,16 @@ def retrain(
     horizon: str | None = Query(default=None, pattern="^(short|medium|long)$"),
     _user: User = Depends(get_current_user),
 ):
-    """重新训练预测模型（时间序列验证，生成新版本）。"""
+    """重新训练（Purged Walk-Forward + 校准 + Champion 更新）。
+
+    后台执行，立即返回 task_id —— 不阻塞 API worker。
+    """
     horizons = [horizon] if horizon else list(HORIZONS.keys())
 
     def _work():
-        results = {}
-        engine = analysis_service.get_engine()
-        for h in horizons:
-            meta = engine.train(h)
-            results[h] = {"trained": meta is not None, "version": meta["version"] if meta else None,
-                          "samples": (meta or {}).get("samples"),
-                          "metrics": (meta or {}).get("metrics")}
-        return results
+        from app.prediction.retraining import RetrainingManager
+
+        return RetrainingManager(analysis_service.get_engine()).retrain(horizons)
 
     result = get_task_manager().run("prediction.retrain", _work, retries=0)
     return {"task_id": result["task_id"], "status": "started"}
@@ -61,10 +59,61 @@ def retrain(
 def backtest(
     version: str,
     horizon: str = Query(default="short", pattern="^(short|medium|long)$"),
+    model_name: str | None = Query(default=None),
     _user: User = Depends(get_current_user),
 ):
+    """Walk-Forward 回测（含 Baseline 对比）。version 仅作标识，可传 latest。"""
     engine = analysis_service.get_engine()
-    result = engine.backtest(horizon, version)
+    result = engine.backtest(horizon, version, model_name=model_name)
     if result is None:
         raise HTTPException(status_code=400, detail="训练数据不足，无法回测")
     return result
+
+
+@router.get("/prediction/health")
+def model_health(
+    horizon: str | None = Query(default=None, pattern="^(short|medium|long)$"),
+    _user: User = Depends(get_current_user),
+):
+    """模型健康度：Champion + 台账真实命中率 vs 验证期表现 → 状态。"""
+    from app.prediction.retraining import RetrainingManager
+
+    return RetrainingManager(analysis_service.get_engine()).health(horizon)
+
+
+@router.get("/prediction/ledger")
+def prediction_ledger(
+    fund_code: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """预测台账：预测历史 + 实际结果 + 命中率统计。"""
+    from app.prediction.ledger import ledger_history, ledger_stats
+    from app.services import fund_service
+
+    fund_id = None
+    if fund_code:
+        fund = fund_service.get_fund_by_code(db, fund_code)
+        if fund is None:
+            raise HTTPException(status_code=404, detail="基金不存在")
+        fund_id = fund.id
+    return {"records": ledger_history(db, fund_id, limit), "stats": ledger_stats(db, fund_id)}
+
+
+@router.post("/prediction/evaluate")
+def evaluate_predictions(_user: User = Depends(get_current_user)):
+    """评价待定预测（后台任务：用未来净值回填实际结果）。"""
+    from app.prediction.ledger import evaluate_pending
+
+    def _work():
+        from app.db.session import SessionLocal
+
+        session = SessionLocal()
+        try:
+            return evaluate_pending(session)
+        finally:
+            session.close()
+
+    result = get_task_manager().run("prediction.evaluate", _work, retries=1)
+    return {"task_id": result["task_id"], "status": "started"}

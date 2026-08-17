@@ -123,32 +123,19 @@ def build_factor_context(db, fund: Fund, df: pd.DataFrame, time_range: str = "3M
 
 
 def _save_snapshot(db, fund: Fund, horizon: str, prediction: dict) -> None:
+    """预测台账持久化（同日同周期去重；未来数据到位后自动评价）。"""
     try:
-        probs = prediction.get("probabilities", {})
-        db.add(
-            AnalysisSnapshot(
-                fund_id=fund.id,
-                model_version=prediction.get("model_version", "baseline"),
-                horizon=horizon,
-                horizon_days=prediction.get("horizon_days", 5),
-                prob_up=probs.get("up", 0.0),
-                prob_range=probs.get("range", 0.0),
-                prob_down=probs.get("down", 0.0),
-                score=prediction.get("score"),
-                confidence=prediction.get("confidence", "low"),
-                factors_json=prediction.get("factors"),
-                data_as_of=parse_date(prediction.get("data_as_of")),
-            )
-        )
-        db.commit()
-        # 清理 60 天前的旧快照，控制体积
-        cutoff = utcnow() - timedelta(days=60)
-        db.query(AnalysisSnapshot).filter(
-            AnalysisSnapshot.fund_id == fund.id, AnalysisSnapshot.created_at < cutoff
-        ).delete()
-        db.commit()
-    except Exception as exc:  # noqa: BLE001 快照失败不影响主流程
-        log.warning("预测快照保存失败: %s", exc)
+        from app.core.config import get_settings
+        from app.prediction.ledger import record_prediction
+
+        if not get_settings().LEDGER_ENABLED:
+            return
+        payload = dict(prediction)
+        payload["horizon"] = horizon
+        payload["score"] = prediction.get("score")
+        record_prediction(db, fund.id, payload)
+    except Exception as exc:  # noqa: BLE001 台账失败不影响主流程
+        log.warning("预测台账保存失败: %s", exc)
 
 
 def analyze_fund(db, fund_code: str, time_range: str = "3M", with_prediction: bool = True) -> dict:

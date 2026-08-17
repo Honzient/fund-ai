@@ -41,15 +41,25 @@ class LLMManager:
         self.settings = get_settings()
         self._providers: dict[str, LLMProvider] = {}
 
+    @staticmethod
+    def _credential_fingerprint(api_key: str) -> str:
+        """凭证指纹：API Key 变更后缓存 key 必然改变（旧 Provider 自动失效）。"""
+        import hashlib
+
+        return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:12] if api_key else "none"
+
     def _get_provider(self, provider: str, user_id: int | None = None) -> LLMProvider:
         provider = provider or "deepseek"
-        key = f"{provider}:{user_id or 0}"
+        api_key = ""
+        if provider == "deepseek":
+            api_key = _user_api_key(user_id) or self.settings.DEEPSEEK_API_KEY
+        # 缓存 key 绑定凭证指纹 + 基础配置：Key 轮换/配置变更后旧缓存自动失效
+        key = f"{provider}:{user_id or 0}:{self._credential_fingerprint(api_key)}"
         if key not in self._providers:
             cls = PROVIDER_CLASSES.get(provider)
             if cls is None:
                 raise LLMUnavailableError(f"未知 LLM Provider: {provider}")
             if provider == "deepseek":
-                api_key = _user_api_key(user_id) or self.settings.DEEPSEEK_API_KEY
                 self._providers[key] = DeepSeekProvider(
                     api_key=api_key,
                     base_url=self.settings.DEEPSEEK_BASE_URL,
@@ -58,6 +68,18 @@ class LLMManager:
             else:
                 self._providers[key] = cls()
         return self._providers[key]
+
+    def invalidate_provider(self, user_id: int | None = None) -> int:
+        """使指定用户（或全部）的 Provider 缓存失效。返回失效数量。"""
+        prefix = f"deepseek:{user_id or 0}:"
+        stale = [k for k in self._providers if k.startswith(prefix)]
+        for k in stale:
+            self._providers.pop(k, None)
+        if user_id is None:
+            stale += [k for k in self._providers if k.startswith("deepseek:")]
+            for k in stale:
+                self._providers.pop(k, None)
+        return len(stale)
 
     def available(self, user_id: int | None = None) -> bool:
         try:
