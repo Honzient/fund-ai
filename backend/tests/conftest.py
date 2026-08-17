@@ -21,6 +21,7 @@ os.environ["STORAGE_DIR"] = os.path.join(_TEST_ROOT, "storage")
 os.environ["LOG_DIR"] = os.path.join(_TEST_ROOT, "logs")
 os.environ["CACHE_TTL_SECONDS"] = "60"
 os.environ["MODEL_JOBS"] = "1"
+os.environ["AUTO_WARMUP_TRAIN"] = "false"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

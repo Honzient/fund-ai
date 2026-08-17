@@ -148,16 +148,84 @@ sentiment_label: positive / negative / neutral。
  "market":{"market_regime":{...}}}
 ```
 
-## 9. 预测模型
+## 9. 预测模型（v0.2 更新）
 
-### GET /prediction/models → `[{version, trained_at, samples, metrics:{accuracy, up_precision, down_precision}, features:[...]}]`
-### POST /prediction/retrain → `{task_id, status}`
-### GET /prediction/backtest/{version} →
+### GET /funds/{code}/prediction?horizon=short|medium|long（响应结构升级）
 ```json
-{"version":"v0.1","generated_at":"...",
- "metrics":{"direction_accuracy":58.2,"up_recall":61.0,"down_recall":55.0,"avg_return_5d":0.4,"max_drawdown":-8.2,"period":"最近12个月","samples":320},
- "disclaimer":"历史回测不代表未来表现。"}
+{
+  "fund_code":"110022","horizon":"short","horizon_days":5,"generated_at":"...",
+  "data_as_of":"2026-08-14",
+  "model_name":"random_forest","model_version":"v1.0","champion":true,
+  "raw_probabilities":{"up":58.0,"range":27.0,"down":15.0},
+  "calibrated_probabilities":{"up":55.2,"range":29.1,"down":15.7},
+  "probabilities":{"up":55.2,"range":29.1,"down":15.7},
+  "calibration_method":"isotonic","calibrated":true,
+  "predicted_class":"up","direction":"偏多",
+  "confidence":"medium","confidence_score":0.52,
+  "feature_importance":[{"feature":"ret_20","importance":0.21}],
+  "feature_snapshot":{"fund_code":"110022","as_of":"...","technical":{"rsi14":{"value":58.2,"quality":"high"}}},
+  "market_snapshot":{"regime":{"label":"中性","score":52},"breadth":60},
+  "note":null,
+  "disclaimer":"历史回测不代表未来表现；本结果仅为基于历史数据的概率估计与情景分析，不构成投资建议，不承诺任何收益。"
+}
 ```
+- `probabilities` = 校准后概率（前端展示用）；`raw_probabilities` = 模型原始输出；
+- `calibration_method`: isotonic | sigmoid | uncalibrated（样本不足自动降级）；
+- 模型未就绪/数据不足时：`model_version="baseline"` + `note` 说明原因。
+
+### GET /prediction/models → 注册表元数据（含 champion/status/metrics/baseline_comparison/calibration_method）
+### POST /prediction/retrain?horizon= → `{task_id, status}`（后台执行，不阻塞）
+### GET /prediction/backtest/{version}?horizon=&model_name=
+```json
+{"version":"latest","available":true,"horizon":"short","horizon_days":5,
+ "samples":420,"retrains":7,
+ "metrics":{"accuracy":0.52,"balanced_accuracy":0.51,"brier_score":0.86,"log_loss":0.99,
+            "ece":0.08,"hit_rate":0.52,"model_score":48.2,"up_precision":0.5},
+ "baselines":{"momentum":{"accuracy":0.55,"model_score":50.1},
+              "majority":{},"random":{},"simple_trend":{},"always_up":{}},
+ "note":"Walk-Forward 滚动回测（Purged 窗口，按时间顺序训练与预测）","disclaimer":"..."}
+```
+
+### GET /prediction/health?horizon=
+```json
+{"short":{
+  "horizon":"short",
+  "champion":{"model_name":"random_forest","version":"v1.0","trained_at":"...","training_end":"...",
+              "calibration_method":"isotonic","model_score":48.2,
+              "metrics":{"brier_score":0.86,"log_loss":0.99,"balanced_accuracy":0.51,"ece":0.08,"hit_rate":0.52},
+              "validation":"PurgedTimeSeriesSplit(embargo=5, purge=4, folds=4)",
+              "baseline_comparison":{"momentum":{"model_score":50.1,"balanced_accuracy":0.5}}},
+  "ledger":{"last_30":{"count":12,"hit_rate":58.3,"directional_hit_rate":60.0},
+            "last_100":{},"all":{}},
+  "status":"healthy|warning|degraded|no_model|insufficient_data",
+  "note":"近30次预测表现与验证期一致",
+  "retrain_recommended":false,
+  "generated_at":"..."}, "medium":{},"long":{}}
+```
+
+### GET /prediction/ledger?fund_code=&limit=
+```json
+{"records":[{"id":1,"fund_id":2,"prediction_date":"2026-08-14","horizon":"short","horizon_days":5,
+  "model_name":"random_forest","model_version":"v1.0","calibrated":true,"calibration_method":"isotonic",
+  "raw_probabilities":{"up":58.0},"calibrated_probabilities":{},
+  "predicted_class":"up","confidence":"medium","confidence_score":0.52,
+  "data_as_of":"2026-08-14",
+  "actual_return":0.42,"actual_class":"up","evaluated_at":"..."}],
+ "stats":{"overall":{"last_30":{"count":12,"hit_rate":58.3,"directional_hit_rate":60.0},
+                     "last_100":{},"all":{}},
+          "by_model":{"random_forest v1.0":{}}}}
+```
+- `actual_return/actual_class/evaluated_at` 为 null 表示尚未评价（等待未来数据）。
+### POST /prediction/evaluate → `{task_id, status}`（后台评价待定预测）
+
+## 9.1 前端新增（v0.2）
+- `/models`：模型健康页（导航「模型健康」）——三周期 Champion、指标卡（Brier/LogLoss/BalancedAcc/ECE/HitRate）、
+  基线对比表、台账命中率（近30/100/全部）、状态徽章（healthy/warning/degraded/no_model/insufficient_data）、
+  重训按钮（POST /prediction/retrain）、版本列表（GET /prediction/models）、回测按钮（GET /prediction/backtest/latest）。
+- 基金详情新增「预测历史」Tab：GET /prediction/ledger?fund_code={code} → 表格
+  （日期 / 周期 / 预测类别 / 校准概率 / 置信度 / 实际结果 / 命中 ✓✗）。
+- 基金详情「AI分析」Tab：概率显示校准后值，附加校准方法徽章 + raw vs calibrated 对比（小字），
+  `note` 非空时显示「统计基线」提示条。
 
 ## 10. AI 对话（自动 Context 注入）
 

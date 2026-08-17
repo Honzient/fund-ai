@@ -11,16 +11,25 @@ def patch_predict(monkeypatch):
     def fake_predict(self, fund_code, horizon):
         return {
             "fund_code": fund_code,
-            "model_version": "v0.1-test",
+            "model_version": "v1.0-test",
+            "model_name": "logistic",
+            "champion": True,
+            "calibration_method": "isotonic",
+            "calibrated": True,
             "horizon": horizon,
             "horizon_days": {"short": 5, "medium": 20, "long": 60}[horizon],
             "generated_at": "2026-01-01T00:00:00",
             "data_as_of": "2026-01-01",
+            "raw_probabilities": {"up": 55.0, "range": 30.0, "down": 15.0},
+            "calibrated_probabilities": {"up": 55.0, "range": 30.0, "down": 15.0},
             "probabilities": {"up": 55.0, "range": 30.0, "down": 15.0},
+            "predicted_class": "up",
             "direction": "偏多",
             "confidence": "medium",
             "confidence_score": 0.5,
             "feature_importance": [],
+            "feature_snapshot": None,
+            "market_snapshot": None,
             "disclaimer": "历史回测不代表未来表现。",
         }
 
@@ -167,10 +176,15 @@ def test_reports_and_notifications(client, auth_headers):
 
     r = client.post("/api/reports/generate", headers=auth_headers)
     assert r.status_code == 200
-    time.sleep(1.5)
-    r = client.get("/api/reports", headers=auth_headers)
-    reports = r.json()
-    assert reports
+    # 报告生成为后台任务：轮询等待完成（最多 20s）
+    reports = []
+    for _ in range(20):
+        time.sleep(1)
+        r = client.get("/api/reports", headers=auth_headers)
+        reports = r.json()
+        if reports:
+            break
+    assert reports, "后台报告任务 20s 内未完成"
     r = client.get(f"/api/reports/{reports[0]['id']}", headers=auth_headers)
     body = r.json()
     assert body["content_md"] and body["content_html"]
@@ -203,6 +217,52 @@ def test_daily_summary(client, auth_headers):
     data = r.json()
     assert data["market"]["label"]
     assert data["watchlist"].get("best") or data["text"]
+
+
+def test_prediction_ledger_endpoint(client, auth_headers):
+    """预测台账：分析接口已产生预测 → 台账可查询（含统计）。"""
+    r = client.get("/api/funds/110022/prediction?horizon=short", headers=auth_headers)
+    assert r.status_code == 200
+    pred = r.json()
+    assert pred["raw_probabilities"]
+    assert pred["calibrated_probabilities"]
+    assert pred["calibration_method"] in ("isotonic", "sigmoid", "uncalibrated")
+    r = client.get("/api/prediction/ledger?fund_code=110022", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert "records" in data and "stats" in data
+    assert len(data["records"]) >= 1
+    record = data["records"][0]
+    assert record["raw_probabilities"] or record["calibrated_probabilities"]
+
+
+def test_model_health_endpoint(client, auth_headers):
+    r = client.get("/api/prediction/health", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert "short" in data
+    entry = data["short"]
+    assert entry["status"] in ("no_model", "healthy", "warning", "degraded", "insufficient_data")
+    assert entry["note"]
+
+
+def test_backtest_has_baselines(client, auth_headers):
+    import time
+
+    # 后台先训练一个模型（若无），保证回测可用；测试用 mock 数据由 /retrain 触发
+    r = client.post("/api/prediction/retrain?horizon=short", headers=auth_headers)
+    assert r.status_code == 200
+    for _ in range(30):
+        time.sleep(2)
+        r = client.get("/api/prediction/models", headers=auth_headers)
+        if r.json():
+            break
+    r = client.get("/api/prediction/backtest/latest?horizon=short", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    if data.get("available"):
+        assert "momentum" in data["baselines"]
+        assert data["metrics"].get("brier_score") is not None or data["metrics"].get("accuracy") is not None
 
 
 def test_tasks(client, auth_headers):
