@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import statistics
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -182,6 +183,80 @@ def ledger_stats(db, fund_id: int | None = None, windows: tuple = (30, 100, 1000
         by_model.setdefault(key, []).append(r)
     by_model_stats = {k: _stats(v[:100]) for k, v in list(by_model.items())[:10]}
     return {"overall": overall, "by_model": by_model_stats}
+
+
+# 置信度区间（confidence_score，0-1）
+CONFIDENCE_BINS: tuple[tuple[str, float, float], ...] = (
+    ("80%+", 0.80, 1.01),
+    ("60–80%", 0.60, 0.80),
+    ("50–60%", 0.50, 0.60),
+    ("<50%", 0.0, 0.50),
+)
+
+
+def _quality_bucket(label: str, subset: list[PredictionRecord]) -> dict:
+    """单个分组的质量统计：未来收益分布 + 命中率。"""
+    bucket: dict = {"bucket": label, "count": len(subset)}
+    if not subset:
+        bucket.update(
+            {
+                "avg_forward_return": None,
+                "median_forward_return": None,
+                "hit_rate": None,
+                "directional_hit_rate": None,
+            }
+        )
+        return bucket
+    returns = [r.actual_return for r in subset if r.actual_return is not None]
+    hits = sum(1 for r in subset if r.predicted_class == r.actual_class)
+    directional = [r for r in subset if r.predicted_class in ("up", "down")]
+    dir_hits = sum(1 for r in directional if r.predicted_class == r.actual_class)
+    bucket.update(
+        {
+            "avg_forward_return": round(float(sum(returns) / len(returns)), 4) if returns else None,
+            "median_forward_return": round(float(statistics.median(returns)), 4) if returns else None,
+            "hit_rate": round(hits / len(subset) * 100, 2),
+            "directional_hit_rate": round(dir_hits / len(directional) * 100, 2) if directional else None,
+        }
+    )
+    return bucket
+
+
+def prediction_quality(
+    db,
+    horizon: str | None = None,
+    fund_id: int | None = None,
+) -> dict:
+    """预测质量分析：预测概率/置信度与未来收益的关系（基于已评价台账）。
+
+    统计：平均/中位数未来收益、命中率——按置信度区间与预测类别分组。
+    只使用 actual_return 已回填的记录；不改动任何台账数据。
+    """
+    q = db.query(PredictionRecord).filter(PredictionRecord.actual_return.isnot(None))
+    if horizon:
+        q = q.filter(PredictionRecord.horizon == horizon)
+    if fund_id is not None:
+        q = q.filter(PredictionRecord.fund_id == fund_id)
+    rows = q.all()
+
+    by_confidence: list[dict] = []
+    for label, lo, hi in CONFIDENCE_BINS:
+        subset = [r for r in rows if r.confidence_score is not None and lo <= r.confidence_score < hi]
+        by_confidence.append(_quality_bucket(label, subset))
+    unknown_conf = [r for r in rows if r.confidence_score is None]
+    by_confidence.append(_quality_bucket("无置信度", unknown_conf))
+
+    by_class: list[dict] = []
+    for cls in ("up", "range", "down"):
+        subset = [r for r in rows if r.predicted_class == cls]
+        by_class.append(_quality_bucket(cls, subset))
+
+    return {
+        "sample_count": len(rows),
+        "horizon": horizon,
+        "by_confidence": [b for b in by_confidence if b["count"] > 0],
+        "by_class": [b for b in by_class if b["count"] > 0],
+    }
 
 
 def _record_dict(r: PredictionRecord) -> dict:

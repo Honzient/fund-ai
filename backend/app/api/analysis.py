@@ -127,6 +127,26 @@ def prediction_ledger(
     return {"records": ledger_history(db, fund_id, limit), "stats": ledger_stats(db, fund_id)}
 
 
+@router.get("/prediction/quality")
+def prediction_quality(
+    horizon: str | None = Query(default=None, pattern="^(short|medium|long)$"),
+    fund_code: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """预测质量分析：预测置信度/类别与未来收益的关系（基于已评价台账）。"""
+    from app.prediction.ledger import prediction_quality as quality_fn
+    from app.services import fund_service
+
+    fund_id = None
+    if fund_code:
+        fund = fund_service.get_fund_by_code(db, fund_code)
+        if fund is None:
+            raise HTTPException(status_code=404, detail="基金不存在")
+        fund_id = fund.id
+    return quality_fn(db, horizon=horizon, fund_id=fund_id)
+
+
 @router.post("/prediction/evaluate")
 def evaluate_predictions(_user: User = Depends(get_current_user)):
     """评价待定预测（后台任务：用未来净值回填实际结果）。"""
