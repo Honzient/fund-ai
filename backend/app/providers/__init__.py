@@ -2,6 +2,7 @@
 
 - eastmoney       → EastmoneyProvider（基金：搜索/净值/估值/持仓）
 - eastmoney-market→ EastmoneyMarketProvider（市场：指数K线/快照）
+- eastmoney-macro → EastmoneyMacroProvider（宏观：PMI/CPI 同比，官方发布日期）
 - mock            → MockProvider（全部领域演示数据）
 - custom          → CustomDataProvider（用户自定义 JSON）
 注册表按顺序尝试，空结果自动 fallback。
@@ -13,6 +14,7 @@ from app.core.config import get_settings
 from app.providers.base import DataProvider
 from app.providers.custom import CustomDataProvider
 from app.providers.eastmoney import EastmoneyProvider
+from app.providers.eastmoney_macro import EastmoneyMacroProvider
 from app.providers.eastmoney_market import EastmoneyMarketProvider
 from app.providers.mock_provider import MockProvider
 from app.providers.registry import ProviderRegistry
@@ -26,6 +28,7 @@ def build_provider_registry(cache: CacheManager | None = None) -> ProviderRegist
         if name == "eastmoney":
             providers.append(EastmoneyProvider())
             providers.append(EastmoneyMarketProvider())
+            providers.append(EastmoneyMacroProvider())
         elif name == "custom":
             providers.append(CustomDataProvider())
         elif name == "mock":

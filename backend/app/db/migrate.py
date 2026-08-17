@@ -51,6 +51,8 @@ def run_migrations() -> None:
         {
             "quality": "VARCHAR(16)",
             "as_of": "DATE",
+            "available_at": "DATE",
+            "source_url": "VARCHAR(512)",
         },
     )
     ensure_columns(

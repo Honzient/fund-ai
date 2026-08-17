@@ -5,6 +5,12 @@
 
 ## 数据质量
 
+- **10 年期国债收益率真实数据源**：东财数据中心无公开债券收益率报表（已探测 RPT_BOND_* 系列均不存在）；
+  候选方案为中债登（chinabond）`yield.chinabond.com.cn/cbweb-mn/yc/downYearBzqx`（官方，返回 xlsx，
+  需引入 openpyxl 依赖并实现解析；每日 17:30 发布当日曲线，`available_at`=数据日）。接入后补充
+  `10年期国债收益率` 指标。
+- **宏观指标扩展**：东财数据中心另有 PPI/M2/社融等报表（RPT_ECONOMY_* 系列），后续按需逐个接入，
+  保持「一次 2~3 个指标」节奏。
 - **eastmoney 持仓报告期失真**：`providers/eastmoney.py::get_holdings` 将 `report_date` 硬编码为
   `date(year, month, 28)`（请求年月），未解析接口返回的真实报告期与披露日（`REPORT_DATE`/`END_DATE`）。
   后果：`available_at` 近似基于失真的报告期。应在解析逻辑中提取真实报告期与公告日并填入

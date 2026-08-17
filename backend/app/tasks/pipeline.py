@@ -64,40 +64,56 @@ def sync_all_data() -> dict:
 def sync_macro(db) -> dict:
     from app.models import MacroData
     from app.providers import get_registry
-    from app.services.news_service import _quality_of
     from app.utils.asyncs import run_async
-    from app.utils.dates import today
+    from app.utils.dates import today, utcnow
 
     items = run_async(get_registry().call("get_macro", limit=300, default=[]))
     added = 0
+    updated = 0
     for item in items:
-        exists = (
-            db.query(MacroData.id)
+        row = (
+            db.query(MacroData)
             .filter(MacroData.indicator == item.indicator, MacroData.period == item.period)
             .first()
         )
-        if exists:
-            continue
         published = item.published_at
         days = (today() - published).days if published else None
         quality = "high" if days is not None and days <= 60 else ("medium" if days is not None and days <= 180 else "low")
-        db.add(
-            MacroData(
-                indicator=item.indicator,
-                value=item.value,
-                unit=item.unit,
-                period=item.period,
-                change=item.change,
-                source=item.source,
-                published_at=published,
-                quality=quality,
-                as_of=published,
-                retrieved_at=utcnow(),
+        available_at = item.available_at or published
+        if row is None:
+            db.add(
+                MacroData(
+                    indicator=item.indicator,
+                    value=item.value,
+                    unit=item.unit,
+                    period=item.period,
+                    change=item.change,
+                    source=item.source,
+                    source_url=item.source_url or None,
+                    published_at=published,
+                    available_at=available_at,
+                    quality=quality,
+                    as_of=published,
+                    retrieved_at=utcnow(),
+                )
             )
-        )
-        added += 1
+            added += 1
+            continue
+        # 更新：值或发布日期变化时刷新（数据源修正 / 首次接入真实数据覆盖演示数据）
+        if row.value != item.value or row.published_at != published:
+            row.value = item.value
+            row.unit = item.unit or row.unit
+            row.change = item.change
+            row.source = item.source or row.source
+            row.source_url = item.source_url or row.source_url
+            row.published_at = published
+            row.available_at = available_at
+            row.quality = quality
+            row.as_of = published
+            row.retrieved_at = utcnow()
+            updated += 1
     db.commit()
-    return {"status": "synced", "new_rows": added}
+    return {"status": "synced", "new_rows": added, "updated": updated, "total": len(items)}
 
 
 def sync_quotes() -> dict:

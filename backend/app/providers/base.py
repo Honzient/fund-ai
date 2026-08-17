@@ -102,7 +102,9 @@ class MacroItem:
     period: str = ""
     change: float | None = None
     published_at: date | None = None
+    available_at: date | None = None  # 公众可获得日（模型 only if available_at <= prediction_time）
     source: str = ""
+    source_url: str = ""  # 可查证的数据来源链接
 
 
 @dataclass
