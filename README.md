@@ -153,6 +153,17 @@ cd backend
 **未知行业分类**、Provider fallback、**LLM 注入隔离/密钥轮换失效/context_hash/日志脱敏**、
 **跨用户数据隔离/无效 JWT**、API 集成全链路。
 
+## 🔧 Git 说明（沙箱环境推送的特殊处理）
+
+本仓库由 `gh api`（REST）从沙箱推送：GitHub 会规范化提交者时间与消息换行，
+因此**远端 commit 哈希与本地不同（内容/目录树 100% 一致）**。在本机对仓库做一次对齐即可无缝继续开发：
+
+```bash
+git fetch origin && git reset --hard origin/main
+```
+
+（工作区文件不会变化——两边目录树完全一致，仅历史指针切换到远端链。）
+
 ## 🔌 扩展新数据源 / 新 LLM
 
 - 新数据源：实现 `app/providers/base.py::DataProvider`，在 `DATA_PROVIDER_ORDER` 中追加名称 —— 无需改动其他代码。
