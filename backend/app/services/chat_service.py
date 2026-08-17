@@ -20,7 +20,7 @@ def fallback_summary(context: dict, question: str) -> str:
         "",
         "> LLM 服务当前不可用，以下内容由本地量化引擎基于最新数据自动生成。",
         "",
-        f"数据截至：{context.get('data_as_of') or '未知'}",
+        f"数据截至：{context.get('latest_data_as_of') or context.get('data_as_of') or '未知'}",
         "",
     ]
     regime = (context.get("market") or {}).get("market_regime") or {}

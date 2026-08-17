@@ -139,10 +139,21 @@ def _save_snapshot(db, fund: Fund, horizon: str, prediction: dict) -> None:
 
 
 def analyze_fund(db, fund_code: str, time_range: str = "3M", with_prediction: bool = True) -> dict:
-    """基金完整分析。结果缓存（10分钟），保证列表页/详情页性能。"""
+    """基金完整分析。结果缓存（10分钟），保证列表页/详情页性能。
+
+    注意：预测结果随 Champion 模型版本变化，缓存键必须绑定 Champion 版本，
+    否则模型训练完成后仍会命中旧的 baseline 缓存。
+    """
     settings = get_settings()
     cache = get_cache()
-    cache_key = f"analysis:{fund_code}:{time_range}:{int(with_prediction)}"
+    champion_key = ""
+    if with_prediction:
+        engine = get_engine()
+        champion_key = ":".join(
+            (engine.registry.get_champion(h) or {}).get("version", "baseline")
+            for h in ("short", "medium", "long")
+        )
+    cache_key = f"analysis:{fund_code}:{time_range}:{int(with_prediction)}:{champion_key}"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached

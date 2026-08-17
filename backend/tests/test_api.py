@@ -257,12 +257,24 @@ def test_backtest_has_baselines(client, auth_headers):
         r = client.get("/api/prediction/models", headers=auth_headers)
         if r.json():
             break
-    r = client.get("/api/prediction/backtest/latest?horizon=short", headers=auth_headers)
+    # 回测为后台任务：POST 提交 → 轮询结果（用 logistic 加速测试）
+    r = client.post("/api/prediction/backtest", json={"horizon": "short", "model_name": "logistic"}, headers=auth_headers)
     assert r.status_code == 200
-    data = r.json()
-    if data.get("available"):
-        assert "momentum" in data["baselines"]
-        assert data["metrics"].get("brier_score") is not None or data["metrics"].get("accuracy") is not None
+    task_id = r.json()["task_id"]
+    data = None
+    for _ in range(40):
+        time.sleep(3)
+        r = client.get(f"/api/prediction/backtest/result/{task_id}", headers=auth_headers)
+        assert r.status_code == 200
+        payload = r.json()
+        if payload["status"] in ("success", "failed"):
+            data = payload
+            break
+    assert data is not None and data["status"] == "success", data
+    result = data["result"]
+    if result.get("available"):
+        assert "momentum" in result["baselines"]
+        assert result["metrics"].get("brier_score") is not None or result["metrics"].get("accuracy") is not None
 
 
 def test_tasks(client, auth_headers):

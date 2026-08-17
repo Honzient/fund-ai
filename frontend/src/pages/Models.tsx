@@ -135,9 +135,23 @@ function BacktestPanel() {
   const run = async () => {
     setLoading(true);
     setError(null);
+    setResult(null);
     try {
-      const r = await api.get<BacktestResponse>(`/prediction/backtest/latest?horizon=${horizon}`);
-      setResult(r);
+      const task = await api.post<{ task_id: number }>('/prediction/backtest', { horizon });
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const r = await api.get<{ status: string; result: BacktestResponse | null; error: string | null }>(
+          `/prediction/backtest/result/${task.task_id}`,
+        );
+        if (r.status === 'success' && r.result) {
+          setResult(r.result);
+          break;
+        }
+        if (r.status === 'failed') {
+          setError(r.error ?? '回测失败');
+          break;
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : '回测失败');
     } finally {

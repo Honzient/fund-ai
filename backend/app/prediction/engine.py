@@ -44,6 +44,16 @@ _CLASS_TO_DIRECTION = {"up": "偏多", "range": "中性", "down": "偏空"}
 MODEL_CANDIDATES = ("logistic", "random_forest")
 
 
+def _safe_nanmedian(X: np.ndarray) -> np.ndarray:
+    """全 NaN 列（数据源整体缺失的特征）不产生 RuntimeWarning，按 0 填充。"""
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        medians = np.nanmedian(X, axis=0)
+    return np.where(np.isnan(medians), 0.0, medians)
+
+
 class PredictionEngine:
     def __init__(self, registry: ModelRegistry | None = None, store: FeatureStore | None = None):
         self.registry = registry or ModelRegistry()
@@ -68,8 +78,7 @@ class PredictionEngine:
 
     def _fold_pipeline(self, X_train: np.ndarray, X_test: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """fold 内：中位数填充 + 标准化，统计量只来自训练集（防预处理泄露）。"""
-        medians = np.nanmedian(X_train, axis=0)
-        medians = np.where(np.isnan(medians), 0.0, medians)
+        medians = _safe_nanmedian(X_train)
         X_train_f = np.where(np.isnan(X_train), medians, X_train)
         X_test_f = np.where(np.isnan(X_test), medians, X_test)
         scaler = StandardScaler().fit(X_train_f)
@@ -153,8 +162,7 @@ class PredictionEngine:
             if data is None:
                 return None
             X, y, _dates, _frame = data
-            medians = np.nanmedian(X, axis=0)
-            medians = np.where(np.isnan(medians), 0.0, medians)
+            medians = _safe_nanmedian(X)
             X_f = np.where(np.isnan(X), medians, X)
             scaler = StandardScaler().fit(X_f)
             X_scaled = scaler.transform(X_f)

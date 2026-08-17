@@ -1,7 +1,7 @@
 """多基金分析 / 预测模型管理 / 回测 / 台账 / 模型健康接口。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -55,19 +55,45 @@ def retrain(
     return {"task_id": result["task_id"], "status": "started"}
 
 
-@router.get("/prediction/backtest/{version}")
-def backtest(
-    version: str,
-    horizon: str = Query(default="short", pattern="^(short|medium|long)$"),
-    model_name: str | None = Query(default=None),
+@router.post("/prediction/backtest")
+def run_backtest(
+    payload: dict = Body(default={"horizon": "short", "model_name": None}),
     _user: User = Depends(get_current_user),
 ):
-    """Walk-Forward 回测（含 Baseline 对比）。version 仅作标识，可传 latest。"""
-    engine = analysis_service.get_engine()
-    result = engine.backtest(horizon, version, model_name=model_name)
-    if result is None:
-        raise HTTPException(status_code=400, detail="训练数据不足，无法回测")
-    return result
+    """Walk-Forward 回测（含 Baseline 对比）。后台执行，立即返回 task_id。"""
+    horizon = str(payload.get("horizon", "short"))
+    if horizon not in HORIZONS:
+        raise HTTPException(status_code=400, detail=f"未知周期: {horizon}")
+    model_name = payload.get("model_name")
+
+    def _work():
+        return analysis_service.get_engine().backtest(horizon, "latest", model_name=model_name)
+
+    result = get_task_manager().run("prediction.backtest", _work, retries=0)
+    return {"task_id": result["task_id"], "status": "started"}
+
+
+@router.get("/prediction/backtest/result/{task_id}")
+def backtest_result(
+    task_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """查询回测任务结果（pending/running/success/failed）。"""
+    from app.models import TaskRun
+
+    row = db.get(TaskRun, task_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {
+        "task_id": row.id,
+        "name": row.name,
+        "status": row.status,
+        "result": row.result,
+        "error": row.error,
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+    }
 
 
 @router.get("/prediction/health")

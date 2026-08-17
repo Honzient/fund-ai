@@ -175,7 +175,9 @@ sentiment_label: positive / negative / neutral。
 
 ### GET /prediction/models → 注册表元数据（含 champion/status/metrics/baseline_comparison/calibration_method）
 ### POST /prediction/retrain?horizon= → `{task_id, status}`（后台执行，不阻塞）
-### GET /prediction/backtest/{version}?horizon=&model_name=
+### POST /prediction/backtest（body: `{"horizon":"short","model_name":null}`）→ `{task_id, status}`（后台执行）
+### GET /prediction/backtest/result/{task_id} → `{status: pending|running|success|failed, result, error}`
+回测结果结构：
 ```json
 {"version":"latest","available":true,"horizon":"short","horizon_days":5,
  "samples":420,"retrains":7,
@@ -221,7 +223,7 @@ sentiment_label: positive / negative / neutral。
 ## 9.1 前端新增（v0.2）
 - `/models`：模型健康页（导航「模型健康」）——三周期 Champion、指标卡（Brier/LogLoss/BalancedAcc/ECE/HitRate）、
   基线对比表、台账命中率（近30/100/全部）、状态徽章（healthy/warning/degraded/no_model/insufficient_data）、
-  重训按钮（POST /prediction/retrain）、版本列表（GET /prediction/models）、回测按钮（GET /prediction/backtest/latest）。
+  重训按钮（POST /prediction/retrain）、版本列表（GET /prediction/models）、回测按钮（POST /prediction/backtest + 轮询 result）。
 - 基金详情新增「预测历史」Tab：GET /prediction/ledger?fund_code={code} → 表格
   （日期 / 周期 / 预测类别 / 校准概率 / 置信度 / 实际结果 / 命中 ✓✗）。
 - 基金详情「AI分析」Tab：概率显示校准后值，附加校准方法徽章 + raw vs calibrated 对比（小字），
