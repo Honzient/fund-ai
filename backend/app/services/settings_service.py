@@ -104,6 +104,10 @@ def set_api_key(db, user_id: int, api_key: str) -> dict:
     row.value = None
     row.updated_at = utcnow()
     db.commit()
+    # Key 轮换：立即失效旧 Provider 缓存，禁止继续使用旧 Key
+    from app.llm import get_llm_manager
+
+    get_llm_manager().invalidate_provider(user_id)
     return {"status": "saved", "has_user_key": True}
 
 
@@ -112,4 +116,7 @@ def delete_api_key(db, user_id: int) -> dict:
     if row is not None:
         db.delete(row)
         db.commit()
+    from app.llm import get_llm_manager
+
+    get_llm_manager().invalidate_provider(user_id)
     return {"status": "deleted", "has_user_key": False}

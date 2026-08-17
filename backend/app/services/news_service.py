@@ -17,6 +17,26 @@ def _content_hash(title: str, source: str) -> str:
     return hashlib.sha1(f"{title}|{source}".encode("utf-8")).hexdigest()
 
 
+def _quality_of(published_at) -> str:
+    """按发布时间与当前差距评估数据质量（陈旧检测）。"""
+    from datetime import timezone as tz_mod
+
+    from app.utils.dates import utcnow
+
+    if published_at is None:
+        return "low"
+    days = (utcnow() - published_at).days
+    if days <= 7:
+        return "high"
+    if days <= 30:
+        return "medium"
+    return "low"
+
+
+def _as_of(published_at):
+    return published_at.date() if published_at else None
+
+
 def sync_news(db, limit: int = 60) -> dict:
     items = run_async(get_registry().call("get_news", limit=limit, default=[]))
     added = 0
@@ -30,18 +50,21 @@ def sync_news(db, limit: int = 60) -> dict:
         sentiment = item.sentiment if item.sentiment else score_text(text)
         importance = item.importance if item.importance else importance_score(text, item.title)
         industries = detect_industries(text)
+        published = item.published_at or utcnow()
         db.add(
             News(
                 title=item.title,
                 content=item.content,
                 source=item.source or "未知来源",
                 url=item.url,
-                published_at=item.published_at or utcnow(),
+                published_at=published,
                 related_fund=item.related_fund,
                 related_industry=item.related_industry or (industries[0] if industries else None),
                 sentiment=round(float(sentiment), 4),
                 importance=round(float(importance), 4),
                 content_hash=digest,
+                quality=_quality_of(published),
+                as_of=_as_of(published),
                 retrieved_at=utcnow(),
             )
         )
@@ -64,13 +87,14 @@ def sync_policies(db, limit: int = 60) -> dict:
         sentiment = item.sentiment if item.sentiment else score_text(text)
         importance = item.importance if item.importance else importance_score(text, item.title)
         industries = detect_industries(text)
+        published = item.published_at or utcnow()
         db.add(
             Policy(
                 title=item.title,
                 content=item.content,
                 source=item.source or "公开政策信息",
                 url=item.url,
-                published_at=item.published_at or utcnow(),
+                published_at=published,
                 department=item.department,
                 policy_type=item.policy_type,
                 related_industry=item.related_industry or (industries[0] if industries else None),
@@ -78,6 +102,8 @@ def sync_policies(db, limit: int = 60) -> dict:
                 impact_score=round(float(item.impact_score), 4),
                 importance=round(float(importance), 4),
                 content_hash=digest,
+                quality=_quality_of(published),
+                as_of=_as_of(published),
                 retrieved_at=utcnow(),
             )
         )
@@ -100,6 +126,8 @@ def _news_dict(row: News) -> dict:
         "sentiment": row.sentiment,
         "sentiment_label": sentiment_label(row.sentiment),
         "importance": row.importance,
+        "quality": row.quality,
+        "as_of": row.as_of.isoformat() if row.as_of else None,
         "retrieved_at": row.retrieved_at.isoformat() if row.retrieved_at else None,
     }
 
@@ -118,6 +146,8 @@ def _policy_dict(row: Policy) -> dict:
         "sentiment": row.sentiment,
         "impact_score": row.impact_score,
         "importance": row.importance,
+        "quality": row.quality,
+        "as_of": row.as_of.isoformat() if row.as_of else None,
         "retrieved_at": row.retrieved_at.isoformat() if row.retrieved_at else None,
     }
 

@@ -130,6 +130,7 @@ def handle_chat(
             role="assistant",
             content=reply,
             context_json=context,
+            context_hash=context.get("context_hash"),
             model=model,
         )
     )

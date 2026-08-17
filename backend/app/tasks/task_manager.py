@@ -1,6 +1,7 @@
 """任务管理器：所有后台任务（数据同步/分析/报告/通知）统一记录状态、错误与重试。"""
 from __future__ import annotations
 
+import concurrent.futures
 from typing import Any, Callable
 
 from app.core.logging import get_logger
@@ -9,6 +10,9 @@ from app.models import TaskRun
 from app.utils.dates import utcnow
 
 log = get_logger("app.task")
+
+# 后台任务执行器（长任务不阻塞 FastAPI worker）
+_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="fundai-task")
 
 
 class TaskManager:
@@ -35,28 +39,40 @@ class TaskManager:
             db.close()
 
     def run(self, name: str, fn: Callable[[], Any], retries: int = 1) -> dict:
-        """执行任务并记录。fn 抛异常时重试，最终失败记录 error。"""
+        """后台线程池执行任务并记录，**不阻塞调用方（FastAPI worker）**。
+
+        fn 抛异常时重试，最终失败记录 error。适合：数据同步、模型训练、
+        回测、报告生成等长任务。
+        """
         run_id = self._create(name)
-        attempt = 0
-        while True:
-            try:
-                result = fn()
-                self._update(
-                    run_id, status="success", finished_at=utcnow(), retries=attempt, result=result
-                )
-                return {"task_id": run_id, "status": "success", "result": result}
-            except Exception as exc:  # noqa: BLE001
-                log.exception("任务 %s 失败(第 %d 次尝试): %s", name, attempt + 1, exc)
-                attempt += 1
-                if attempt > retries:
+
+        def _work() -> None:
+            import time
+
+            attempt = 0
+            while True:
+                try:
+                    result = fn()
                     self._update(
-                        run_id,
-                        status="failed",
-                        finished_at=utcnow(),
-                        retries=attempt - 1,
-                        error=str(exc)[:2000],
+                        run_id, status="success", finished_at=utcnow(), retries=attempt, result=result
                     )
-                    return {"task_id": run_id, "status": "failed", "error": str(exc)[:500]}
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("任务 %s 失败(第 %d 次尝试): %s", name, attempt + 1, exc)
+                    attempt += 1
+                    if attempt > retries:
+                        self._update(
+                            run_id,
+                            status="failed",
+                            finished_at=utcnow(),
+                            retries=attempt - 1,
+                            error=str(exc)[:2000],
+                        )
+                        return
+                    time.sleep(min(2 * attempt, 10))
+
+        _EXECUTOR.submit(_work)
+        return {"task_id": run_id, "status": "started"}
 
     def recent(self, limit: int = 50) -> list[dict]:
         db = SessionLocal()

@@ -50,6 +50,14 @@ async def lifespan(app: FastAPI):
         db.close()
     scheduler = get_scheduler()
     scheduler.start()
+    # 预测模型预热：后台训练缺失的 Champion（不阻塞启动，predict 期间用统计基线）
+    try:
+        from app.prediction.retraining import RetrainingManager
+        from app.services import analysis_service
+
+        RetrainingManager(analysis_service.get_engine()).warmup()
+    except Exception:  # noqa: BLE001
+        log.warning("模型预热启动失败（不影响主流程）", exc_info=True)
     yield
     scheduler.shutdown()
     log.info("应用已停止")

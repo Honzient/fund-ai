@@ -35,6 +35,7 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(16))  # user / assistant / system
     content: Mapped[str] = mapped_column(Text, default="")
     context_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # 注入的 Context 快照
+    context_hash: Mapped[str | None] = mapped_column(String(16), nullable=True)  # Context 内容指纹
     model: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

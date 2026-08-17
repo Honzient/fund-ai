@@ -20,10 +20,11 @@ from app.models import (
     News,
     Notification,
     Policy,
+    SecurityIndustry,
     User,
     Watchlist,
 )
-from app.providers.mock_provider import MOCK_FUNDS, MockProvider
+from app.providers.mock_provider import MOCK_FUNDS, MOCK_HOLDINGS, MockProvider
 from app.services.market_service import DEFAULT_INDEXES
 from app.utils.asyncs import run_async
 from app.utils.dates import utcnow
@@ -40,6 +41,31 @@ DEMO_WATCHLIST = [
 ]
 
 
+def _seed_industries(db) -> None:
+    """行业分类表：内置股票行业映射（taxonomy=builtin，可后续扩展申万/中信/GICS）。"""
+    if db.query(SecurityIndustry.id).first() is not None:
+        return
+    mapping: dict[str, str] = {}
+    for rows in MOCK_HOLDINGS.values():
+        for code, _name, _w, industry in rows:
+            mapping[code] = industry
+    from app.providers.eastmoney import _STOCK_INDUSTRY
+
+    mapping.update(_STOCK_INDUSTRY)
+    for code, industry in mapping.items():
+        db.add(
+            SecurityIndustry(
+                security_code=code,
+                industry=industry,
+                taxonomy="builtin",
+                source="builtin",
+                retrieved_at=utcnow(),
+            )
+        )
+    db.commit()
+    log.info("行业分类表已初始化: %d 条", len(mapping))
+
+
 def _news_hash(title: str, source: str) -> str:
     return hashlib.sha1(f"{title}|{source}".encode("utf-8")).hexdigest()
 
@@ -50,6 +76,7 @@ def seed_demo_data(db) -> dict:
         return {"seeded": False, "reason": "SEED_DEMO_DATA=false"}
     if db.query(Fund.id).first() is not None:
         return {"seeded": False, "reason": "数据库已有基金数据，跳过"}
+    _seed_industries(db)
     mock = MockProvider()
     log.info("开始注入演示数据（MockProvider，确定性生成）…")
 

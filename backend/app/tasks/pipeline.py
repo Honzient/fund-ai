@@ -49,6 +49,13 @@ def sync_all_data() -> dict:
             stats["policies"] = news_service.sync_policies(db)
         except Exception as exc:  # noqa: BLE001
             stats["policies"] = {"status": "failed", "reason": str(exc)[:200]}
+        # 数据同步后：评价预测台账（用新净值回填实际结果）
+        try:
+            from app.prediction.ledger import evaluate_pending
+
+            stats["ledger_evaluation"] = evaluate_pending(db, max_records=1000)
+        except Exception as exc:  # noqa: BLE001
+            stats["ledger_evaluation"] = {"status": "failed", "reason": str(exc)[:200]}
     finally:
         db.close()
     return stats
@@ -57,7 +64,9 @@ def sync_all_data() -> dict:
 def sync_macro(db) -> dict:
     from app.models import MacroData
     from app.providers import get_registry
+    from app.services.news_service import _quality_of
     from app.utils.asyncs import run_async
+    from app.utils.dates import today
 
     items = run_async(get_registry().call("get_macro", limit=300, default=[]))
     added = 0
@@ -69,6 +78,9 @@ def sync_macro(db) -> dict:
         )
         if exists:
             continue
+        published = item.published_at
+        days = (today() - published).days if published else None
+        quality = "high" if days is not None and days <= 60 else ("medium" if days is not None and days <= 180 else "low")
         db.add(
             MacroData(
                 indicator=item.indicator,
@@ -77,7 +89,9 @@ def sync_macro(db) -> dict:
                 period=item.period,
                 change=item.change,
                 source=item.source,
-                published_at=item.published_at,
+                published_at=published,
+                quality=quality,
+                as_of=published,
                 retrieved_at=utcnow(),
             )
         )

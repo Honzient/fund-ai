@@ -128,7 +128,7 @@ class EastmoneyProvider(DataProvider):
         self._base_headers = dict(_HEADERS)
 
     async def _get(self, url: str, headers: dict | None = None, params: dict | None = None) -> httpx.Response:
-        await self._limiter.wait()
+        self._limiter.wait()  # 线程安全时间锁（同步调用，避免跨事件循环问题）
         h = dict(self._base_headers)
         if headers:
             h.update(headers)
@@ -372,80 +372,30 @@ class EastmoneyProvider(DataProvider):
                     stock_code=code,
                     stock_name=clean[2],
                     weight=weight,
-                    industry=_STOCK_INDUSTRY.get(code, "其他"),
+                    industry=_STOCK_INDUSTRY.get(code, "unknown"),
                     market_value=mv,
                     source="eastmoney",
                 )
             )
         return items
 
-    # ------------------------------------------------------------ 指数
 
-    async def get_index_history(
-        self, index_code: str, start: date | None = None, end: date | None = None
-    ) -> list[IndexBar]:
-        secid = _INDEX_SECID.get(index_code)
-        if not secid:
-            return []
-        beg = (start or date.today() - timedelta(days=365 * 3)).strftime("%Y%m%d")
-        end_s = (end or date.today()).strftime("%Y%m%d")
-        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-        data = await self._get_json(
-            url,
-            params={
-                "secid": secid, "klt": "101", "fqt": "1",
-                "fields1": "f1,f2,f3,f4,f5,f6",
-                "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
-                "beg": beg, "end": end_s,
-            },
-        )
-        klines = ((data or {}).get("data") or {}).get("klines") or []
-        bars: list[IndexBar] = []
-        for line in klines:
-            parts = line.split(",")
-            if len(parts) < 6:
-                continue
-            try:
-                bars.append(
-                    IndexBar(
-                        date=parse_date(parts[0]) or date.today(),
-                        open=float(parts[1]), close=float(parts[2]),
-                        high=float(parts[3]), low=float(parts[4]),
-                        volume=float(parts[5]) if parts[5] else None,
-                        source="eastmoney",
-                    )
-                )
-            except (ValueError, IndexError):
-                continue
-        return bars
+    # ------------------------------------------------------------ 辅助解析
 
-    async def get_index_snapshot(self, index_code: str) -> IndexSnapshot | None:
-        secid = _INDEX_SECID.get(index_code)
-        if not secid:
-            return None
-        url = "https://push2.eastmoney.com/api/qt/stock/get"
-        data = await self._get_json(
-            url, params={"secid": secid, "fields": "f43,f44,f45,f46,f60,f170,f86"}
-        )
-        row = (data or {}).get("data") or {}
-        if not row:
+    @staticmethod
+    def _var_string(text: str, var: str) -> str:
+        m = re.search(var + r'\s*=\s*"(.*?)"', text)
+        return m.group(1) if m else ""
+
+    @staticmethod
+    def _var_float(text: str, var: str) -> float | None:
+        m = re.search(var + r'\s*=\s*"([\d.]+)"', text)
+        if not m:
             return None
         try:
-            # push2 行情字段为整数放大值（×100），先缩放再计算
-            close = float(row.get("f43") or 0) / 100.0
-            prev_close = float(row.get("f60") or 0) / 100.0
-            change = round(close - prev_close, 4)
-            change_pct = round((close / prev_close - 1) * 100, 4) if prev_close else 0.0
-            ts = row.get("f86")
-            data_time = (
-                datetime.fromtimestamp(int(ts), tz=timezone.utc) if ts else datetime.now(timezone.utc)
-            )
-        except (TypeError, ValueError):
+            return float(m.group(1))
+        except ValueError:
             return None
-        return IndexSnapshot(
-            index_code=index_code,
-            index_name=_INDEX_NAMES.get(index_code, index_code),
-            market="US" if index_code in ("NDX", "SPX") else ("HK" if index_code == "HSI" else "CN"),
-            latest_close=close, change=change, change_pct=change_pct,
-            data_time=data_time, source="eastmoney",
-        )
+
+
+# 指数接口已拆分至 eastmoney_market.EastmoneyMarketProvider（领域 Provider 职责分离）

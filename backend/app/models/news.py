@@ -1,9 +1,9 @@
-"""新闻与政策模型。所有内容保留来源与链接，禁止编造。"""
+"""新闻与政策模型。所有内容保留来源与链接，禁止编造；含数据质量与 as_of 溯源。"""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, Float, String, Text
+from sqlalchemy import Date, DateTime, Float, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -24,6 +24,8 @@ class News(Base):
     sentiment: Mapped[float] = mapped_column(Float, default=0.0)  # -1..1
     importance: Mapped[float] = mapped_column(Float, default=0.5)  # 0..1
     content_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    quality: Mapped[str | None] = mapped_column(String(16), nullable=True)  # high/medium/low
+    as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
     retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -44,5 +46,7 @@ class Policy(Base):
     impact_score: Mapped[float] = mapped_column(Float, default=0.5)  # 预计影响强度 0..1
     importance: Mapped[float] = mapped_column(Float, default=0.5)  # 0..1
     content_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    quality: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
     retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
