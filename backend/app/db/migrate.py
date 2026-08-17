@@ -55,6 +55,13 @@ def run_migrations() -> None:
     )
     ensure_columns(
         engine,
+        "fund_holdings",
+        {
+            "available_at": "DATE",
+        },
+    )
+    ensure_columns(
+        engine,
         "messages",
         {
             "context_hash": "VARCHAR(16)",

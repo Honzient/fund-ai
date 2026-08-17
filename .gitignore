@@ -10,6 +10,7 @@ backend/fund.db
 backend/storage/
 backend/logs/
 .pytest_cache/
+pytest-cache-files-*/
 backend/build/
 backend/dist/
 

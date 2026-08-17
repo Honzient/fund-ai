@@ -1,13 +1,28 @@
 """基金相关模型：Fund / FundDailyData / FundHolding。"""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.utils.dates import utcnow
+
+# 持仓报告 → 公开披露时限（法定最迟披露日的保守近似，自然日）。
+# 季报：季度结束后 15 个工作日内（≈21 自然日）；半年报：8 月 31 日前（6-30 → +62 天）；
+# 年报：4 月 30 日前（12-31 → +121 天，闰年亦覆盖）。非季末报告期（数据源异常）回退 +15 天。
+_HOLDING_DISCLOSURE_DAYS: dict[int, int] = {3: 21, 6: 62, 9: 21, 12: 121}
+
+
+def holding_available_at(report_date: date) -> date:
+    """报告期末 → 公众可获得日期（保守近似，保证无 Point-in-Time 泄露）。
+
+    数据源提供真实公告日时优先使用真实值（FundHolding.available_at），
+    否则用本函数的法定披露时限近似。
+    """
+    days = _HOLDING_DISCLOSURE_DAYS.get(report_date.month, 15)
+    return report_date + timedelta(days=days)
 
 
 class Fund(Base):
@@ -76,6 +91,7 @@ class FundHolding(Base):
         ForeignKey("funds.id", ondelete="CASCADE"), index=True
     )
     report_date: Mapped[date] = mapped_column(Date)
+    available_at: Mapped[date | None] = mapped_column(Date, nullable=True)  # 公众可获得日（无则用 holding_available_at 近似）
     stock_code: Mapped[str] = mapped_column(String(16))
     stock_name: Mapped[str] = mapped_column(String(64))
     weight: Mapped[float] = mapped_column(Float)  # 百分比（9.8 = 9.8%）

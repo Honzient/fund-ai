@@ -16,12 +16,13 @@ from app.analytics.indicators import rsi
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.models import Fund, FundDailyData, FundHolding, MacroData, MarketIndexData, News, Policy
+from app.models.fund import holding_available_at
 from app.utils.dates import parse_date, today
 
 log = get_logger("app.prediction")
 
-FEATURE_VERSION = "v0.2.0"
-DATASET_VERSION = "v0.2.0"
+FEATURE_VERSION = "v0.3.0"
+DATASET_VERSION = "v0.3.0"
 
 TECHNICAL_COLUMNS = [
     "ret_1", "ret_5", "ret_20", "ret_60",
@@ -48,7 +49,7 @@ LAYER_COLUMNS: dict[str, list[str]] = {
     "fundamental": FUNDAMENTAL_COLUMNS,
 }
 
-MASKED_LAYERS = ("macro", "industry", "sentiment", "policy")
+MASKED_LAYERS = ("macro", "industry", "sentiment", "policy", "fundamental")
 
 _MACRO_KEY_MAP = {
     "制造业PMI": "macro_pmi",
@@ -233,43 +234,99 @@ class FeatureStore:
                     out[industry] = (existing[0], series)
         return out
 
-    def _load_fund_static(self, code: str) -> dict:
+    def _load_fund_holdings(self, code: str) -> list[dict]:
+        """按报告期升序的持仓快照列表（含 available_at 与聚合指标），供按日期截断使用。
+
+        available_at：优先数据库中的真实公开日；无则用法定披露时限近似（见 holding_available_at）。
+        """
+        db = SessionLocal()
+        try:
+            fund = db.query(Fund).filter(Fund.fund_code == code).first()
+            if fund is None:
+                return []
+            rows = (
+                db.query(FundHolding)
+                .filter(FundHolding.fund_id == fund.id)
+                .order_by(FundHolding.report_date, FundHolding.weight.desc())
+                .all()
+            )
+            per_period: dict[date, dict] = {}
+            for r in rows:
+                pp = per_period.setdefault(r.report_date, {"available_at": None, "items": []})
+                if pp["available_at"] is None:
+                    pp["available_at"] = r.available_at or holding_available_at(r.report_date)
+                pp["items"].append((r.stock_code, r.weight or 0, r.industry or "unknown"))
+            out: list[dict] = []
+            for report_date, pp in per_period.items():
+                top = sorted(pp["items"], key=lambda w: -w[1])[:10]
+                industries: dict[str, float] = {}
+                for _code, w, ind in top:
+                    industries[ind] = industries.get(ind, 0.0) + w
+                top_industry = max(industries, key=industries.get) if industries else None
+                out.append(
+                    {
+                        "report_date": report_date,
+                        "available_at": pp["available_at"],
+                        "top10_concentration": round(sum(w for _c, w, _i in top), 2),
+                        "industry_hhi": round(sum((w / 100) ** 2 for w in industries.values()), 4)
+                        if industries
+                        else None,
+                        "industries": industries,
+                        "top_industry": top_industry,
+                        "top_industry_weight": industries.get(top_industry) if top_industry else None,
+                    }
+                )
+            out.sort(key=lambda s: s["report_date"])
+            return out
+        finally:
+            db.close()
+
+    def _load_fund_static(self, code: str, as_of: date | None = None) -> dict:
+        """as_of 时刻可获得的静态特征快照（as_of 默认今天；持仓按 available_at 截断）。"""
         db = SessionLocal()
         try:
             fund = db.query(Fund).filter(Fund.fund_code == code).first()
             if fund is None:
                 return {}
+            as_of = as_of or today()
             age = 0.0
             if fund.establish_date:
-                age = max(0.0, (today() - fund.establish_date).days / 365.25)
-            holdings = (
-                db.query(FundHolding)
-                .filter(FundHolding.fund_id == fund.id)
-                .order_by(FundHolding.report_date.desc(), FundHolding.weight.desc())
-                .all()
-            )
-            top10 = 0.0
-            industries: dict[str, float] = {}
-            report_date = None
-            if holdings:
-                report_date = holdings[0].report_date
-                top = [h for h in holdings if h.report_date == report_date][:10]
-                top10 = round(sum(h.weight or 0 for h in top), 2)
-                for h in top:
-                    industry = h.industry or "unknown"
-                    industries[industry] = industries.get(industry, 0.0) + (h.weight or 0)
-            hhi = round(sum((w / 100) ** 2 for w in industries.values()), 4) if industries else None
-            top_industry = max(industries, key=industries.get) if industries else None
-            return {
+                age = max(0.0, (as_of - fund.establish_date).days / 365.25)
+            snap = None
+            for s in self._load_fund_holdings(code):
+                if s["available_at"] <= as_of:
+                    snap = s
+            base: dict = {
                 "fund_size": fund.fund_size,
                 "fund_age_years": round(age, 2),
-                "top10_concentration": top10,
-                "industry_hhi": hhi,
-                "industries": industries,
-                "top_industry": top_industry,
-                "top_industry_weight": industries.get(top_industry) if top_industry else None,
-                "holdings_report_date": report_date.isoformat() if report_date else None,
+                "top10_concentration": None,
+                "industry_hhi": None,
+                "industries": {},
+                "top_industry": None,
+                "top_industry_weight": None,
+                "holdings_report_date": None,
             }
+            if snap is not None:
+                base.update(
+                    {
+                        "top10_concentration": snap["top10_concentration"],
+                        "industry_hhi": snap["industry_hhi"],
+                        "industries": snap["industries"],
+                        "top_industry": snap["top_industry"],
+                        "top_industry_weight": snap["top_industry_weight"],
+                        "holdings_report_date": snap["report_date"].isoformat(),
+                    }
+                )
+            return base
+        finally:
+            db.close()
+
+    def _load_fund_meta(self, code: str) -> dict:
+        """基金基础信息（仅训练时间截断所需字段）。"""
+        db = SessionLocal()
+        try:
+            fund = db.query(Fund).filter(Fund.fund_code == code).first()
+            return {"establish_date": fund.establish_date if fund else None}
         finally:
             db.close()
 
@@ -289,7 +346,8 @@ class FeatureStore:
         news_s, news_c = self._load_news_daily()
         pol_s, pol_i, pol_c = self._load_policy_daily()
         industry_daily = self._load_industry_daily()
-        static = {code: self._load_fund_static(code) for code in funds}
+        static = {code: self._load_fund_holdings(code) for code in funds}
+        meta = {code: self._load_fund_meta(code) for code in funds}
 
         h = HORIZONS[horizon]
         frames: list[pd.DataFrame] = []
@@ -307,32 +365,41 @@ class FeatureStore:
             # 宏观（按发布日期 asof）
             for col, series in macro.items():
                 feats[col] = self._asof_values(idx, series)
-            # 行业（基金第一大行业）
-            st = static.get(code, {})
-            top_industry = st.get("top_industry")
-            if top_industry and top_industry in industry_daily:
-                ind_news, ind_pol = industry_daily[top_industry]
-                feats["industry_news_sentiment_7d"] = self._asof_values(
-                    idx, _calendar_aggregate(ind_news, 7) if not ind_news.empty else pd.Series(dtype=float)
-                )
-                feats["industry_policy_sentiment_30d"] = self._asof_values(
-                    idx, _calendar_aggregate(ind_pol, 30) if not ind_pol.empty else pd.Series(dtype=float)
-                )
-            else:
-                feats["industry_news_sentiment_7d"] = np.nan
-                feats["industry_policy_sentiment_30d"] = np.nan
-            feats["industry_weight_top"] = st.get("top_industry_weight")
-            # 情绪 / 政策
+            # 情绪 / 政策（按发布时间 asof，天然无未来）
             feats["news_sentiment_7d"] = self._asof_values(idx, _calendar_aggregate(news_s, 7))
             feats["news_count_7d"] = self._asof_values(idx, _count_aggregate(news_c, 7))
             feats["policy_sentiment_30d"] = self._asof_values(idx, _calendar_aggregate(pol_s, 30))
             feats["policy_importance_30d"] = self._asof_values(idx, _calendar_aggregate(pol_i, 30))
             feats["policy_count_30d"] = self._asof_values(idx, _count_aggregate(pol_c, 30))
-            # 基本面（静态）
-            feats["fund_size"] = st.get("fund_size")
-            feats["fund_age_years"] = st.get("fund_age_years")
-            feats["top10_concentration"] = st.get("top10_concentration")
-            feats["industry_hhi"] = st.get("industry_hhi")
+            # 基本面（Point-in-Time：持仓按 available_at<=T 截断；基金年龄按 T 计算；
+            # fund_size 无历史规模数据源 → 历史样本诚实缺失，绝不使用当前值）
+            st_snaps = static.get(code, [])
+            est = meta.get(code, {}).get("establish_date")
+            top10_vals, hhi_vals, topw_vals, ind_arr, avail_ok = self._static_asof(idx, st_snaps)
+            feats["top10_concentration"] = top10_vals
+            feats["industry_hhi"] = hhi_vals
+            feats["industry_weight_top"] = topw_vals
+            # 行业新闻/政策序列：按 T 时刻持仓的 top_industry 选择（行业选择本身不泄露未来）
+            ind_news_col = np.full(len(idx), np.nan)
+            ind_pol_col = np.full(len(idx), np.nan)
+            if avail_ok.any():
+                for ind in np.unique(ind_arr[avail_ok]):
+                    if ind is None or ind not in industry_daily:
+                        continue
+                    ind_news, ind_pol = industry_daily[ind]
+                    news_agg = _calendar_aggregate(ind_news, 7) if not ind_news.empty else pd.Series(dtype=float)
+                    pol_agg = _calendar_aggregate(ind_pol, 30) if not ind_pol.empty else pd.Series(dtype=float)
+                    m = avail_ok & (ind_arr == ind)
+                    ind_news_col[m] = self._asof_values(idx[m], news_agg)
+                    ind_pol_col[m] = self._asof_values(idx[m], pol_agg)
+            feats["industry_news_sentiment_7d"] = ind_news_col
+            feats["industry_policy_sentiment_30d"] = ind_pol_col
+            if est is not None:
+                ages = (pd.DatetimeIndex(feats["date"]) - pd.Timestamp(est)).days / 365.25
+                feats["fund_age_years"] = np.clip(ages.to_numpy(dtype=float), 0.0, None)
+            else:
+                feats["fund_age_years"] = np.nan
+            feats["fund_size"] = np.nan  # 历史规模缺失（无历史数据源），掩码列标记缺失
             # 标签与前向收益
             price = feats["nav"]
             future_ret = price.shift(-h) / price - 1
@@ -372,6 +439,48 @@ class FeatureStore:
                 df[mask] = df[col].isna().astype(int)
                 mask_cols.append(mask)
         return mask_cols
+
+    @staticmethod
+    def _static_asof(
+        idx: pd.DatetimeIndex, snaps: list[dict]
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """按 idx 每个日期取 available_at<=T 的最新持仓快照（Point-in-Time 截断）。
+
+        返回 (top10 集中度, 行业 HHI, 第一大行业权重, 第一大行业, 是否有快照)。
+        """
+        n = len(idx)
+        if not snaps:
+            return (
+                np.full(n, np.nan),
+                np.full(n, np.nan),
+                np.full(n, np.nan),
+                np.full(n, None, dtype=object),
+                np.zeros(n, dtype=bool),
+            )
+        sorted_snaps = sorted(snaps, key=lambda s: s["available_at"])
+        left = pd.DataFrame({"date": pd.DatetimeIndex(idx).as_unit("ns")})
+        right = pd.DataFrame(
+            {
+                "date": pd.DatetimeIndex(
+                    [pd.Timestamp(s["available_at"]) for s in sorted_snaps]
+                ).as_unit("ns"),
+                "rank": np.arange(len(sorted_snaps)),
+            }
+        )
+        merged = pd.merge_asof(left, right, on="date", direction="backward")
+        ranks = merged["rank"].to_numpy()
+        ok = ~pd.isna(ranks)
+        top10 = np.full(n, np.nan)
+        hhi = np.full(n, np.nan)
+        topw = np.full(n, np.nan)
+        inds = np.full(n, None, dtype=object)
+        if ok.any():
+            r = ranks[ok].astype(int)
+            top10[ok] = [sorted_snaps[i]["top10_concentration"] for i in r]
+            hhi[ok] = [sorted_snaps[i]["industry_hhi"] for i in r]
+            topw[ok] = [sorted_snaps[i]["top_industry_weight"] for i in r]
+            inds[ok] = [sorted_snaps[i]["top_industry"] for i in r]
+        return top10, hhi, topw, inds, ok
 
     @staticmethod
     def _asof_values(idx: pd.DatetimeIndex, series: pd.Series) -> pd.Series:

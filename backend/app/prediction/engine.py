@@ -237,7 +237,8 @@ class PredictionEngine:
 
     def get_champion(self, horizon: str) -> tuple[Any, Any, dict] | None:
         meta = self.registry.get_champion(horizon)
-        if meta is None:
+        # 特征版本不匹配（特征集/缺失语义变更）→ 旧模型不可用，等待重训（避免列错位）
+        if meta is None or meta.get("feature_version") != FEATURE_VERSION:
             return None
         loaded = self.registry.load(meta["version"], horizon)
         if loaded is None:

@@ -361,21 +361,24 @@ def sync_holdings(db, fund_code: str) -> dict:
         ).all()
     }
     from app.models import industry_of
+    from app.models.fund import holding_available_at
 
     added = 0
     for item in items:
         if item.stock_code in existing:
             continue
-        # 行业解析：优先行业分类表（SecurityIndustry），其次 Provider 提示，最后 unknown
-        industry = item.industry
+        # 行业解析：优先行业分类表（SecurityIndustry，按报告期取历史有效行业），
+        # 其次 Provider 提示，最后 unknown
+        industry = industry_of(db, item.stock_code, as_of=item.report_date)
         if not industry or industry in ("unknown", "其他"):
-            industry = industry_of(db, item.stock_code)
+            industry = item.industry
         if not industry or industry in ("其他",):
             industry = "unknown"
         db.add(
             FundHolding(
                 fund_id=fund.id,
                 report_date=item.report_date,
+                available_at=item.available_at or holding_available_at(item.report_date),
                 stock_code=item.stock_code,
                 stock_name=item.stock_name,
                 weight=item.weight,

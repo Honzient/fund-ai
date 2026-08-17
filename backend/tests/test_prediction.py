@@ -1,4 +1,6 @@
 """预测引擎 v0.2 测试：概率输出 / 训练注册 / 校准 / 回测 / 统计基线 / Purged 切分。"""
+from datetime import date
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -51,13 +53,33 @@ def synthetic_store(monkeypatch):
     def fake_industry(self):
         return {}
 
-    def fake_static(self, code):
+    def fake_static(self, code, as_of=None):
         return {
             "fund_size": 100.0, "fund_age_years": 8.0,
             "top10_concentration": 50.0, "industry_hhi": 0.2,
             "industries": {"测试行业": 50.0}, "top_industry": "测试行业",
             "top_industry_weight": 50.0, "holdings_report_date": None,
         }
+
+    def fake_holdings(self, code):
+        # 两期持仓快照（Point-in-Time：训练按 available_at 截断）
+        return [
+            {
+                "report_date": date(2022, 1, 31), "available_at": date(2022, 2, 28),
+                "top10_concentration": 45.0, "industry_hhi": 0.15,
+                "industries": {"测试行业": 45.0}, "top_industry": "测试行业",
+                "top_industry_weight": 45.0,
+            },
+            {
+                "report_date": date(2023, 6, 30), "available_at": date(2023, 8, 31),
+                "top10_concentration": 55.0, "industry_hhi": 0.25,
+                "industries": {"测试行业": 55.0}, "top_industry": "测试行业",
+                "top_industry_weight": 55.0,
+            },
+        ]
+
+    def fake_meta(self, code):
+        return {"establish_date": date(2015, 1, 1)}
 
     monkeypatch.setattr(fs_module.FeatureStore, "_load_fund_histories", fake_load_fund_histories)
     monkeypatch.setattr(fs_module.FeatureStore, "_load_market_series", fake_load_market_series)
@@ -66,6 +88,8 @@ def synthetic_store(monkeypatch):
     monkeypatch.setattr(fs_module.FeatureStore, "_load_policy_daily", fake_policy)
     monkeypatch.setattr(fs_module.FeatureStore, "_load_industry_daily", fake_industry)
     monkeypatch.setattr(fs_module.FeatureStore, "_load_fund_static", fake_static)
+    monkeypatch.setattr(fs_module.FeatureStore, "_load_fund_holdings", fake_holdings)
+    monkeypatch.setattr(fs_module.FeatureStore, "_load_fund_meta", fake_meta)
     return funds
 
 

@@ -67,6 +67,7 @@ class HoldingItem:
     weight: float  # 百分比
     industry: str = ""
     market_value: float | None = None  # 亿元
+    available_at: date | None = None  # 公众可获得日（真实公告日；无则由服务层按披露时限近似）
     source: str = ""
 
 
