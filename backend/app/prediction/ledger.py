@@ -1,0 +1,213 @@
+"""预测台账（Prediction Ledger）。
+
+每次对外输出预测 → 持久化 PredictionRecord；
+未来数据到位后 → 评价任务回填实际收益/实际类别；
+由此得到模型的历史真实命中率（模型健康度依据）。
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import date, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import Date, DateTime, Float, ForeignKey, JSON, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base
+from app.utils.dates import utcnow
+
+
+class PredictionRecord(Base):
+    __tablename__ = "prediction_records"
+    __table_args__ = (
+        UniqueConstraint("fund_id", "prediction_date", "horizon", name="uq_pred_record"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fund_id: Mapped[int] = mapped_column(ForeignKey("funds.id", ondelete="CASCADE"), index=True)
+    prediction_date: Mapped[date] = mapped_column(Date, index=True)
+    horizon: Mapped[str] = mapped_column(String(16))  # short/medium/long
+    horizon_days: Mapped[int] = mapped_column(Float, default=5)
+    model_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    calibrated: Mapped[bool] = mapped_column(default=True)
+    calibration_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    raw_probabilities: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    calibrated_probabilities: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    predicted_class: Mapped[str | None] = mapped_column(String(16), nullable=True)  # up/range/down
+    confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)  # high/medium/low
+    confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    feature_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    market_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    data_as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # 评价字段（未来数据到位后回填）
+    actual_return: Mapped[float | None] = mapped_column(Float, nullable=True)  # 前向收益 %
+    actual_class: Mapped[str | None] = mapped_column(String(16), nullable=True)  # up/range/down
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+def record_prediction(db, fund_id: int, payload: dict) -> PredictionRecord:
+    """保存一次预测（同基金同预测日同周期去重：保留当日首次）。"""
+    from app.utils.dates import parse_date
+
+    prediction_date = parse_date(payload.get("data_as_of"))
+    if prediction_date is None:
+        prediction_date = date.today()
+    existing = (
+        db.query(PredictionRecord)
+        .filter(
+            PredictionRecord.fund_id == fund_id,
+            PredictionRecord.prediction_date == prediction_date,
+            PredictionRecord.horizon == payload.get("horizon"),
+        )
+        .first()
+    )
+    if existing is not None:
+        return existing
+    raw = payload.get("raw_probabilities") or payload.get("probabilities") or {}
+    cal = payload.get("calibrated_probabilities") or payload.get("probabilities") or {}
+    record = PredictionRecord(
+        fund_id=fund_id,
+        prediction_date=prediction_date,
+        horizon=payload.get("horizon", "short"),
+        horizon_days=int(payload.get("horizon_days", 5)),
+        model_name=payload.get("model_name"),
+        model_version=payload.get("model_version"),
+        calibrated=bool(payload.get("calibrated", False)),
+        calibration_method=payload.get("calibration_method"),
+        raw_probabilities=raw,
+        calibrated_probabilities=cal,
+        predicted_class=payload.get("predicted_class"),
+        confidence=payload.get("confidence"),
+        confidence_score=payload.get("confidence_score"),
+        feature_snapshot=payload.get("feature_snapshot"),
+        market_snapshot=payload.get("market_snapshot"),
+        data_as_of=prediction_date,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def evaluate_pending(db, max_records: int = 2000) -> dict:
+    """评价待定预测：对每个未评价记录，用基金净值回填 horizon 日后实际收益与类别。"""
+    from app.models import FundDailyData
+    from app.prediction.features import TARGET_THRESHOLDS
+
+    records = (
+        db.query(PredictionRecord)
+        .filter(PredictionRecord.actual_class.is_(None))
+        .order_by(PredictionRecord.prediction_date)
+        .limit(max_records)
+        .all()
+    )
+    evaluated = 0
+    pending = 0
+    for record in records:
+        navs = (
+            db.query(FundDailyData.date, FundDailyData.nav)
+            .filter(
+                FundDailyData.fund_id == record.fund_id,
+                FundDailyData.date >= record.prediction_date,
+            )
+            .order_by(FundDailyData.date)
+            .limit(record.horizon_days + 1)
+            .all()
+        )
+        # 需要预测日 + horizon 日两条净值
+        if len(navs) < 2:
+            pending += 1
+            continue
+        start = navs[0]
+        candidates = [n for n in navs if (n[0] - start[0]).days >= 5]
+        if not candidates:
+            pending += 1
+            continue
+        end = candidates[0]
+        ret = (end[1] / start[1] - 1) * 100 if start[1] else None
+        if ret is None:
+            pending += 1
+            continue
+        thr = TARGET_THRESHOLDS.get(record.horizon, 0.005)
+        cls = "up" if ret > thr * 100 else ("down" if ret < -thr * 100 else "range")
+        record.actual_return = round(ret, 4)
+        record.actual_class = cls
+        record.evaluated_at = utcnow()
+        evaluated += 1
+    db.commit()
+    return {"status": "done", "evaluated": evaluated, "pending": pending}
+
+
+def ledger_history(db, fund_id: int | None = None, limit: int = 200) -> list[dict]:
+    q = db.query(PredictionRecord)
+    if fund_id is not None:
+        q = q.filter(PredictionRecord.fund_id == fund_id)
+    rows = q.order_by(PredictionRecord.prediction_date.desc(), PredictionRecord.id.desc()).limit(limit).all()
+    return [_record_dict(r) for r in rows]
+
+
+def ledger_stats(db, fund_id: int | None = None, windows: tuple = (30, 100, 1000000)) -> dict:
+    """模型命中率统计（近30/近100/全部），分模型与总体。"""
+    q = db.query(PredictionRecord).filter(PredictionRecord.actual_class.isnot(None))
+    if fund_id is not None:
+        q = q.filter(PredictionRecord.fund_id == fund_id)
+    rows = q.order_by(PredictionRecord.prediction_date.desc()).all()
+
+    def _stats(subset):
+        if not subset:
+            return None
+        hits = sum(1 for r in subset if r.predicted_class == r.actual_class)
+        directional = sum(
+            1 for r in subset
+            if r.predicted_class in ("up", "down") and r.predicted_class == r.actual_class
+        )
+        directional_total = sum(1 for r in subset if r.predicted_class in ("up", "down"))
+        return {
+            "count": len(subset),
+            "hit_rate": round(hits / len(subset) * 100, 2),
+            "directional_hit_rate": round(
+                (directional / directional_total * 100) if directional_total else 0, 2
+            ),
+        }
+
+    overall = {}
+    for label, size in (("last_30", 30), ("last_100", 100), ("all", 10**9)):
+        overall[label] = _stats(rows[:size])
+    by_model: dict[str, dict] = {}
+    for r in rows:
+        key = f"{r.model_name or 'unknown'} {r.model_version or '?'}"
+        by_model.setdefault(key, []).append(r)
+    by_model_stats = {k: _stats(v[:100]) for k, v in list(by_model.items())[:10]}
+    return {"overall": overall, "by_model": by_model_stats}
+
+
+def _record_dict(r: PredictionRecord) -> dict:
+    return {
+        "id": r.id,
+        "fund_id": r.fund_id,
+        "prediction_date": r.prediction_date.isoformat(),
+        "horizon": r.horizon,
+        "horizon_days": r.horizon_days,
+        "model_name": r.model_name,
+        "model_version": r.model_version,
+        "calibrated": r.calibrated,
+        "calibration_method": r.calibration_method,
+        "raw_probabilities": r.raw_probabilities,
+        "calibrated_probabilities": r.calibrated_probabilities,
+        "predicted_class": r.predicted_class,
+        "confidence": r.confidence,
+        "confidence_score": r.confidence_score,
+        "data_as_of": r.data_as_of.isoformat() if r.data_as_of else None,
+        "actual_return": r.actual_return,
+        "actual_class": r.actual_class,
+        "evaluated_at": r.evaluated_at.isoformat() if r.evaluated_at else None,
+    }
+
+
+def snapshot_hash(snapshot: Any) -> str:
+    """特征/上下文快照的规范化哈希（context_hash）。"""
+    payload = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

@@ -78,6 +78,13 @@ class Settings(BaseSettings):
     MODEL_RETRAIN_DAYS: int = 7
     RF_MIN_SAMPLES: int = 800
     MODEL_JOBS: int = 1  # 沙箱/受限环境用 1（joblib 多线程需要命名管道）；生产可设 -1 或核数
+    DATASET_YEARS: float = 4.0  # 训练集回溯年数
+    CV_N_SPLITS: int = 4  # Purged Walk-Forward 折数
+    CALIBRATION_METHOD: str = "isotonic"  # isotonic | sigmoid（样本不足自动 uncalibrated）
+    BACKTEST_MODEL: str = "random_forest"  # 回测默认模型
+    BACKTEST_RETRAIN_EVERY: int = 60
+    LEDGER_ENABLED: bool = True  # 预测台账持久化
+    AUTO_WARMUP_TRAIN: bool = True  # 启动后台预热训练（不阻塞启动）
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -35,5 +35,7 @@ def get_db():
 def init_db() -> None:
     from app import models  # noqa: F401 确保模型注册
     from app.db.base import Base
+    from app.db.migrate import run_migrations
 
     Base.metadata.create_all(engine)
+    run_migrations()
