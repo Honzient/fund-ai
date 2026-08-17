@@ -259,6 +259,127 @@ def prediction_quality(
     }
 
 
+# ---------------------------------------------------------------- 错误环境分析（v0.3）
+
+# 市场状态 label → 标准枚举
+_MARKET_LABEL_MAP = {"中性偏多": "bull", "中性偏空": "bear", "中性": "sideways"}
+
+# 技术状态阈值（feature_snapshot.technical）
+RSI_HIGH = 70.0
+RSI_LOW = 30.0
+VOL_HIGH = 0.02  # 20 日波动率 ≥2% → 高波动
+VOL_LOW = 0.01  # 20 日波动率 ≤1% → 低波动
+DRAWDOWN_LARGE = -0.15  # 60 日回撤 ≤-15% → 大回撤
+
+
+def _feat_value(record: PredictionRecord, layer: str, col: str):
+    """从台账特征快照取数值（快照缺失/结构异常 → None）。"""
+    try:
+        info = ((record.feature_snapshot or {}).get(layer) or {}).get(col)
+        return info.get("value") if isinstance(info, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _market_bucket_of(record: PredictionRecord) -> str:
+    try:
+        regime = (record.market_snapshot or {}).get("regime") or {}
+        return _MARKET_LABEL_MAP.get(regime.get("label"), "unknown")
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _rsi_bucket_of(value) -> str:
+    if value is None:
+        return "missing"
+    if value > RSI_HIGH:
+        return "rsi>70"
+    if value < RSI_LOW:
+        return "rsi<30"
+    return "rsi_normal"
+
+
+def _vol_bucket_of(value) -> str:
+    if value is None:
+        return "missing"
+    if value >= VOL_HIGH:
+        return "high_volatility"
+    if value <= VOL_LOW:
+        return "low_volatility"
+    return "normal_volatility"
+
+
+def _drawdown_bucket_of(value) -> str:
+    if value is None:
+        return "missing"
+    if value <= DRAWDOWN_LARGE:
+        return "large_drawdown"
+    return "normal_drawdown"
+
+
+def _error_bucket(label: str, subset: list[PredictionRecord]) -> dict:
+    """错误环境分组的统计（命中率 + 错误率 + 收益）。"""
+    bucket = _quality_bucket(label, subset)
+    bucket["error_rate"] = round(100.0 - bucket["hit_rate"], 2) if bucket["hit_rate"] is not None else None
+    return bucket
+
+
+def error_analysis(
+    db,
+    horizon: str | None = None,
+    fund_id: int | None = None,
+) -> dict:
+    """错误环境分析：模型在什么环境下更容易预测错误（基于已评价台账）。
+
+    维度：市场状态（bull/bear/sideways）、基金类型、置信度、
+    技术状态（RSI 超买超卖、波动率、大回撤）。
+    只读分析，不修改台账，不影响预测结果。
+    """
+    from app.models import Fund
+
+    q = (
+        db.query(PredictionRecord, Fund)
+        .join(Fund, PredictionRecord.fund_id == Fund.id)
+        .filter(PredictionRecord.actual_class.isnot(None))
+    )
+    if horizon:
+        q = q.filter(PredictionRecord.horizon == horizon)
+    if fund_id is not None:
+        q = q.filter(PredictionRecord.fund_id == fund_id)
+    rows = q.all()
+
+    def _dimension(dimension: str, buckets: list[tuple[str, list]]) -> dict:
+        nonempty = [_error_bucket(label, subset) for label, subset in buckets if subset]
+        return {"dimension": dimension, "buckets": nonempty}
+
+    by_market: dict[str, list] = {}
+    by_type: dict[str, list] = {}
+    by_conf: dict[str, list] = {}
+    by_rsi: dict[str, list] = {}
+    by_vol: dict[str, list] = {}
+    by_dd: dict[str, list] = {}
+    for record, fund in rows:
+        by_market.setdefault(_market_bucket_of(record), []).append(record)
+        by_type.setdefault(fund.fund_type or "unknown", []).append(record)
+        by_conf.setdefault(record.confidence or "unknown", []).append(record)
+        by_rsi.setdefault(_rsi_bucket_of(_feat_value(record, "technical", "rsi14")), []).append(record)
+        by_vol.setdefault(_vol_bucket_of(_feat_value(record, "technical", "vol_20")), []).append(record)
+        by_dd.setdefault(_drawdown_bucket_of(_feat_value(record, "technical", "mdd_60")), []).append(record)
+
+    return {
+        "sample_count": len(rows),
+        "horizon": horizon,
+        "environments": [
+            _dimension("market_regime", sorted(by_market.items())),
+            _dimension("fund_type", sorted(by_type.items())),
+            _dimension("confidence", [("high", by_conf.get("high", [])), ("medium", by_conf.get("medium", [])), ("low", by_conf.get("low", [])), ("unknown", by_conf.get("unknown", []))]),
+            _dimension("technical_rsi", sorted(by_rsi.items())),
+            _dimension("technical_volatility", sorted(by_vol.items())),
+            _dimension("technical_drawdown", sorted(by_dd.items())),
+        ],
+    }
+
+
 def _record_dict(r: PredictionRecord) -> dict:
     return {
         "id": r.id,
