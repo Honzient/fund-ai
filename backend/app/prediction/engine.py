@@ -134,10 +134,28 @@ class PredictionEngine:
             results[name] = {"metrics": evaluate_model(y_true, y_pred, proba, fwd), "samples": len(y_true)}
             if name in MODEL_CANDIDATES and proba is not None:
                 oof[name] = (y_true, proba)
+                # 每个候选独立做 OOF 概率校准 → 校准后指标（Champion 按校准后表现选择）
+                calibrator = ProbabilityCalibrator(method=self.settings.CALIBRATION_METHOD)
+                calibrator.fit(y_true, proba)
+                results[name]["calibrator"] = calibrator
+                if calibrator.method != "uncalibrated":
+                    cal_proba = calibrator.predict(proba)
+                    cal_metrics = evaluate_model(y_true, np.argmax(cal_proba, axis=1), cal_proba, None)
+                    cal_info = calibration_metrics(y_true, cal_proba)
+                    results[name]["calibrated_metrics"] = cal_metrics
+                    results[name]["calibration"] = {
+                        "method": calibrator.method,
+                        "calibrated": True,
+                        **cal_info,
+                    }
+                else:
+                    results[name]["calibration"] = {"method": "uncalibrated", "calibrated": False}
         model_names = [n for n in MODEL_CANDIDATES if n in results]
         if not model_names:
             return None
-        champion = max(model_names, key=lambda n: results[n]["metrics"].get("model_score", 0))
+        champion = self._pick_champion(results)
+        if champion is None:
+            return None
         return {
             "horizon": horizon,
             "folds": folds,
@@ -147,6 +165,21 @@ class PredictionEngine:
             "training_end": str(np.max(dates)),
             "n_samples": int(len(X)),
         }
+
+    @staticmethod
+    def _pick_champion(results: dict) -> str | None:
+        """按校准后 ModelScore 选择 Champion；校准不可用（uncalibrated）时回退未校准分数。"""
+        candidates = [n for n in MODEL_CANDIDATES if n in results]
+        if not candidates:
+            return None
+
+        def score(name: str) -> float:
+            cal = results[name].get("calibrated_metrics") or {}
+            if cal.get("model_score") is not None:
+                return float(cal["model_score"])
+            return float((results[name].get("metrics") or {}).get("model_score", 0.0))
+
+        return max(candidates, key=score)
 
     # ------------------------------------------------------------ 训练
 
@@ -169,16 +202,11 @@ class PredictionEngine:
             model: BaseModel = get_model(champion_name)
             model.fit(X_scaled, y)
 
-            calibrator = ProbabilityCalibrator(method=self.settings.CALIBRATION_METHOD)
-            cal_metrics = eval_result["candidates"][champion_name]["metrics"]
-            calibration_info: dict = {}
-            if eval_result["oof"] is not None:
-                oof_y, oof_proba = eval_result["oof"]
-                calibrator.fit(oof_y, oof_proba)
-                if calibrator.method != "uncalibrated":
-                    cal_proba = calibrator.predict(oof_proba)
-                    cal_metrics = evaluate_model(oof_y, np.argmax(cal_proba, axis=1), cal_proba, None)
-                    calibration_info = calibration_metrics(oof_y, cal_proba)
+            champion_res = eval_result["candidates"][champion_name]
+            # Champion 的校准器与校准后指标在 evaluate_candidates 中按 OOF 拟合完成
+            calibrator = champion_res.get("calibrator") or ProbabilityCalibrator(method="uncalibrated")
+            cal_metrics = champion_res.get("calibrated_metrics") or champion_res["metrics"]
+            calibration_info: dict = champion_res.get("calibration") or {}
 
             version = self.registry.next_version(horizon)
             columns = self.store.feature_columns

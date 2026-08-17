@@ -216,3 +216,73 @@ def test_calibration_output_normalized():
     assert out.shape == (n, 3)
     assert np.all(out >= 0) and np.all(out <= 1)
     assert np.allclose(out.sum(axis=1), 1.0, atol=1e-6)
+
+
+# ---------------------------------------------------------------- Champion 选择（v0.3）
+
+def test_champion_selected_by_calibrated_score():
+    """Champion 按校准后 ModelScore 选择：模型 A raw 好但校准差，模型 B raw 稍差但校准更好 → 选 B。"""
+    from app.prediction.engine import PredictionEngine
+
+    results = {
+        "logistic": {"metrics": {"model_score": 90.0}, "calibrated_metrics": {"model_score": 40.0}},
+        "random_forest": {"metrics": {"model_score": 85.0}, "calibrated_metrics": {"model_score": 88.0}},
+    }
+    assert PredictionEngine._pick_champion(results) == "random_forest"
+
+
+def test_champion_falls_back_to_raw_when_uncalibrated():
+    """校准不可用（uncalibrated）时回退未校准分数选择。"""
+    from app.prediction.engine import PredictionEngine
+
+    results = {
+        "logistic": {"metrics": {"model_score": 90.0}},
+        "random_forest": {"metrics": {"model_score": 85.0}, "calibrated_metrics": {"model_score": 70.0}},
+    }
+    assert PredictionEngine._pick_champion(results) == "logistic"
+
+
+def test_evaluate_candidates_reports_calibrated_metrics(engine, synthetic_store):
+    """候选评测输出校准后指标，Champion 与「校准后分数最高（不可用时回退 raw）」一致。"""
+    result = engine.evaluate_candidates("short")
+    assert result is not None
+    for name in ("logistic", "random_forest"):
+        cand = result["candidates"][name]
+        assert "calibration" in cand
+        if cand["calibration"].get("calibrated"):
+            assert cand["calibrated_metrics"]["model_score"] is not None
+            assert "ece" in cand["calibrated_metrics"]
+        else:
+            assert cand["calibration"]["method"] == "uncalibrated"
+            assert "calibrated_metrics" not in cand
+
+    def pick_score(name):
+        cand = result["candidates"][name]
+        cal = cand.get("calibrated_metrics") or {}
+        if cal.get("model_score") is not None:
+            return cal["model_score"]
+        return cand["metrics"]["model_score"]
+
+    expected = max(("logistic", "random_forest"), key=pick_score)
+    assert result["champion"] == expected
+
+
+def test_train_saves_calibrator_of_calibrated_champion(engine, synthetic_store):
+    """train 复用候选评测的校准器与校准后指标注册 Champion。"""
+    eval_result = engine.evaluate_candidates("short")
+    assert eval_result is not None
+    champion = eval_result["champion"]
+    champion_res = eval_result["candidates"][champion]
+    meta = engine.train("short")
+    assert meta is not None
+    assert meta["calibration_method"] == champion_res["calibration"]["method"]
+    cal = champion_res.get("calibrated_metrics")
+    if cal is not None:
+        assert meta["calibrated_metrics"]["model_score"] == cal["model_score"]
+        assert meta["calibrated_metrics"]["ece"] == cal["ece"]
+    else:
+        # 校准不可用：meta 的校准后指标回退为未校准指标
+        assert meta["calibrated_metrics"]["model_score"] == meta["metrics"]["model_score"]
+    loaded = engine.registry.load_calibrator(meta["version"], "short")
+    assert loaded is not None
+    assert loaded.method == meta["calibration_method"]
