@@ -153,16 +153,22 @@ cd backend
 **未知行业分类**、Provider fallback、**LLM 注入隔离/密钥轮换失效/context_hash/日志脱敏**、
 **跨用户数据隔离/无效 JWT**、API 集成全链路。
 
-## 🔧 Git 说明（沙箱环境推送的特殊处理）
+## 🔧 Git 约定与推送说明
 
-本仓库由 `gh api`（REST）从沙箱推送：GitHub 会规范化提交者时间与消息换行，
-因此**远端 commit 哈希与本地不同（内容/目录树 100% 一致）**。在本机对仓库做一次对齐即可无缝继续开发：
+**开发约定：所有版本改动（涉及较大更新）都必须提交并推送到 GitHub 仓库 `Honzient/fund-ai`（main 分支）。**
+
+- 本地与远端当前已完全一致：远端 `main` = 本地 HEAD（`b573690`，12 个提交，含 v0.1 初始提交 + v0.2 全部改动）。
+- 常规推送直接使用带 token 的 URL 形式（沙箱内凭据助手不可用）：
+
+```bash
+git push "https://x-access-token:<TOKEN>@github.com/Honzient/fund-ai.git" main
+```
+
+- 若在本机开发，建议先对齐一次（当前两边已一致，无需再执行；仅当远端被其他方式改动时才需要）：
 
 ```bash
 git fetch origin && git reset --hard origin/main
 ```
-
-（工作区文件不会变化——两边目录树完全一致，仅历史指针切换到远端链。）
 
 ## 🔌 扩展新数据源 / 新 LLM
 
