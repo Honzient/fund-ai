@@ -203,22 +203,135 @@ export type Horizon = 'short' | 'medium' | 'long';
 export interface PredictionResponse {
   fund_code: string;
   model_version: string;
+  model_name: string | null;
+  champion: boolean | null;
   horizon: Horizon;
   horizon_days: number;
   generated_at: string | null;
   data_as_of: string | null;
   probabilities: PredictionProbabilities;
+  raw_probabilities: PredictionProbabilities | null;
+  calibrated_probabilities: PredictionProbabilities | null;
+  calibration_method: string | null;
+  calibrated: boolean | null;
+  predicted_class: 'up' | 'range' | 'down' | null;
   direction: string;
   confidence: string;
   confidence_score: number;
   score: number | null;
   feature_importance: { feature: string; importance: number }[];
+  feature_snapshot: Record<string, unknown> | null;
+  market_snapshot: { regime: MarketRegime | null; breadth: number | null } | null;
+  note: string | null;
   factors: {
     positive: FactorItem[];
     negative: FactorItem[];
     risks: RiskItem[];
   };
   disclaimer: string;
+}
+
+// ---------- 预测台账 / 模型健康（v0.2） ----------
+export interface LedgerRecord {
+  id: number;
+  fund_id: number;
+  prediction_date: string | null;
+  horizon: Horizon;
+  horizon_days: number | null;
+  model_name: string | null;
+  model_version: string | null;
+  calibrated: boolean | null;
+  calibration_method: string | null;
+  raw_probabilities: PredictionProbabilities | null;
+  calibrated_probabilities: PredictionProbabilities | null;
+  predicted_class: 'up' | 'range' | 'down' | null;
+  confidence: string | null;
+  confidence_score: number | null;
+  data_as_of: string | null;
+  actual_return: number | null;
+  actual_class: 'up' | 'range' | 'down' | null;
+  evaluated_at: string | null;
+}
+
+export interface LedgerHitStats {
+  count: number | null;
+  hit_rate: number | null;
+  directional_hit_rate: number | null;
+}
+
+export interface LedgerResponse {
+  records: LedgerRecord[];
+  stats: {
+    overall: {
+      last_30: LedgerHitStats | null;
+      last_100: LedgerHitStats | null;
+      all: LedgerHitStats | null;
+    };
+    by_model: Record<string, LedgerHitStats | null>;
+  } | null;
+}
+
+export interface ModelHealthEntry {
+  horizon: Horizon;
+  champion: {
+    model_name: string | null;
+    version: string | null;
+    trained_at: string | null;
+    training_end: string | null;
+    calibration_method: string | null;
+    model_score: number | null;
+    metrics: {
+      brier_score: number | null;
+      log_loss: number | null;
+      balanced_accuracy: number | null;
+      ece: number | null;
+      hit_rate: number | null;
+    } | null;
+    validation: string | null;
+    baseline_comparison: Record<string, { model_score: number | null; balanced_accuracy: number | null }> | null;
+  } | null;
+  ledger: {
+    last_30: LedgerHitStats | null;
+    last_100: LedgerHitStats | null;
+    all: LedgerHitStats | null;
+  } | null;
+  status: 'healthy' | 'warning' | 'degraded' | 'no_model' | 'insufficient_data' | string;
+  note: string | null;
+  retrain_recommended: boolean | null;
+  generated_at: string | null;
+}
+
+export type ModelHealthResponse = Partial<Record<Horizon, ModelHealthEntry>>;
+
+export interface PredictionModel {
+  version: string;
+  horizon: Horizon | null;
+  model_name: string | null;
+  trained_at: string | null;
+  training_end: string | null;
+  samples: number | null;
+  calibration_method: string | null;
+  champion: boolean | null;
+  status: string | null;
+  metrics: Record<string, number | null> | null;
+  baseline_comparison: Record<string, unknown> | null;
+  feature_version: string | null;
+  dataset_version: string | null;
+  features: string[] | null;
+}
+
+export interface BacktestResponse {
+  version: string;
+  available: boolean | null;
+  reason: string | null;
+  horizon: Horizon | null;
+  horizon_days: number | null;
+  samples: number | null;
+  retrains: number | null;
+  metrics: Record<string, number | null> | null;
+  baselines: Record<string, Record<string, number | null>> | null;
+  note: string | null;
+  disclaimer: string | null;
 }
 
 export interface TaskResponse {
@@ -371,27 +484,12 @@ export interface MultiAnalysisResponse {
 }
 
 // ---------- 预测模型 ----------
-export interface PredictionModel {
+export interface PredictionModelLegacy {
   version: string;
   trained_at: string | null;
   samples: number | null;
   metrics: { accuracy: number | null; up_precision: number | null; down_precision: number | null } | null;
   features: string[] | null;
-}
-
-export interface BacktestResponse {
-  version: string;
-  generated_at: string | null;
-  metrics: {
-    direction_accuracy: number | null;
-    up_recall: number | null;
-    down_recall: number | null;
-    avg_return_5d: number | null;
-    max_drawdown: number | null;
-    period: string | null;
-    samples: number | null;
-  };
-  disclaimer: string;
 }
 
 // ---------- AI 对话 ----------

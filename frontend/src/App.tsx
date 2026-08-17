@@ -14,6 +14,7 @@ import Analysis from './pages/Analysis';
 import Chat from './pages/Chat';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
+import Models from './pages/Models';
 
 function RequireAuth({ children }: { children: React.ReactElement }) {
   const token = useAppStore((s) => s.token);
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="/news" element={<News />} />
           <Route path="/policy" element={<Policy />} />
           <Route path="/analysis" element={<Analysis />} />
+          <Route path="/models" element={<Models />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/settings" element={<Settings />} />

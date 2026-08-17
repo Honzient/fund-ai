@@ -7,6 +7,7 @@ import type {
   HoldingsResponse,
   IndexHistoryResponse,
   IndicatorsResponse,
+  LedgerResponse,
   MarketIndex,
   NavHistoryResponse,
   NewsItem,
@@ -54,7 +55,7 @@ function fmtDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-const TABS = ['走势图', '技术指标', '风险指标', '持仓', 'AI分析', '新闻', '政策', 'AI对话'] as const;
+const TABS = ['走势图', '技术指标', '风险指标', '持仓', 'AI分析', '预测历史', '新闻', '政策', 'AI对话'] as const;
 type TabKey = (typeof TABS)[number];
 
 // ---------- Tab: 走势图 ----------
@@ -575,6 +576,19 @@ function AiAnalysisTab({ code }: { code: string }) {
                     </span>
                     <span className="num-mono text-[10px] text-zinc-500">置信度 {(p.confidence_score * 100).toFixed(0)}%</span>
                   </div>
+                  {p.calibrated && p.calibration_method && p.calibration_method !== 'uncalibrated' ? (
+                    <div className="mb-2 text-[10px] text-zinc-500">
+                      校准：{p.calibration_method} · 原始 {p.raw_probabilities?.up.toFixed(0)}/
+                      {p.raw_probabilities?.range.toFixed(0)}/{p.raw_probabilities?.down.toFixed(0)}%
+                    </div>
+                  ) : (
+                    <div className="mb-2 text-[10px] text-amber-400/80">概率未经校准（校准样本不足）</div>
+                  )}
+                  {p.note && (
+                    <div className="mb-2 rounded bg-amber-500/10 px-2 py-1 text-[10px] leading-relaxed text-amber-300">
+                      {p.note}
+                    </div>
+                  )}
                   <div className="space-y-1.5">
                     {(
                       [
@@ -614,6 +628,8 @@ function AiAnalysisTab({ code }: { code: string }) {
         </div>
         <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
           历史回测不代表未来表现；本结果仅为概率估计，不构成投资建议。模型版本：{predShort.data?.model_version ?? '--'}
+          {predShort.data?.model_name ? `（${predShort.data.model_name}）` : ''}
+          ；校准方法：{predShort.data?.calibration_method ?? '--'}
         </p>
       </Card>
 
@@ -751,6 +767,109 @@ function FundPolicyTab() {
             </p>
           </div>
         </Modal>
+      )}
+    </Card>
+  );
+}
+
+// ---------- Tab: 预测历史（Prediction Ledger） ----------
+const HORIZON_LABELS: Record<string, string> = { short: '短期', medium: '中期', long: '长期' };
+const CLASS_LABELS: Record<string, string> = { up: '看涨', range: '中性', down: '看跌' };
+
+function PredictionHistoryTab({ code }: { code: string }) {
+  const ledger = useApi<LedgerResponse>(
+    () => api.get<LedgerResponse>(`/prediction/ledger`, { fund_code: code, limit: 100 }),
+    [code],
+  );
+  const records = ledger.data?.records ?? [];
+  const stats = ledger.data?.stats?.overall;
+  return (
+    <Card
+      title="预测历史（Prediction Ledger）"
+      extra={
+        stats && (
+          <span className="num-mono text-[11px] text-zinc-500">
+            近30次命中 {stats.last_30?.hit_rate != null ? `${stats.last_30.hit_rate.toFixed(1)}%` : '—'} · 近100次{' '}
+            {stats.last_100?.hit_rate != null ? `${stats.last_100.hit_rate.toFixed(1)}%` : '—'}
+          </span>
+        )
+      }
+      bodyClassName="p-0"
+    >
+      {ledger.loading && <Skeleton className="m-2 h-40" />}
+      {ledger.error && <ErrorState message={ledger.error} onRetry={ledger.reload} />}
+      {!ledger.loading && records.length === 0 && (
+        <EmptyState
+          title="暂无预测历史"
+          desc="在「AI分析」页生成预测后，此处展示每次预测与实际结果的对照；未来数据到位后自动评价命中情况。"
+          icon="🗂️"
+        />
+      )}
+      {records.length > 0 && (
+        <table className="w-full text-left text-xs">
+          <thead>
+            <tr className="border-b border-white/5 text-[11px] text-zinc-500">
+              <th className="px-3 py-2">预测日期</th>
+              <th className="px-3 py-2">周期</th>
+              <th className="px-3 py-2">预测</th>
+              <th className="px-3 py-2">校准概率</th>
+              <th className="px-3 py-2">置信度</th>
+              <th className="px-3 py-2">模型</th>
+              <th className="px-3 py-2">实际结果</th>
+              <th className="px-3 py-2">命中</th>
+            </tr>
+          </thead>
+          <tbody>
+            {records.map((r) => {
+              const prob = r.calibrated_probabilities ?? r.raw_probabilities;
+              const hit = r.actual_class !== null && r.actual_class !== undefined;
+              const isHit = hit && r.predicted_class === r.actual_class;
+              const clsColor =
+                r.predicted_class === 'up' ? 'text-up' : r.predicted_class === 'down' ? 'text-down' : 'text-zinc-300';
+              return (
+                <tr key={r.id} className="border-b border-white/5 last:border-0">
+                  <td className="num-mono px-3 py-2 text-zinc-400">{formatDate(r.prediction_date)}</td>
+                  <td className="px-3 py-2 text-zinc-400">
+                    {HORIZON_LABELS[r.horizon] ?? r.horizon}（{r.horizon_days}日）
+                  </td>
+                  <td className={cn('px-3 py-2 font-medium', clsColor)}>
+                    {CLASS_LABELS[r.predicted_class ?? ''] ?? '—'}
+                  </td>
+                  <td className="num-mono px-3 py-2 text-zinc-300">
+                    {prob ? `↑${prob.up.toFixed(0)}/→${prob.range.toFixed(0)}/↓${prob.down.toFixed(0)}` : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-zinc-400">{r.confidence ?? '—'}</td>
+                  <td className="num-mono px-3 py-2 text-zinc-500">
+                    {r.model_version ?? '—'}
+                    {r.calibrated ? '' : '（未校准）'}
+                  </td>
+                  <td className="px-3 py-2 text-zinc-300">
+                    {hit ? (
+                      <>
+                        <span
+                          className={cn(
+                            'font-medium',
+                            r.actual_class === 'up' ? 'text-up' : r.actual_class === 'down' ? 'text-down' : 'text-zinc-300',
+                          )}
+                        >
+                          {CLASS_LABELS[r.actual_class ?? ''] ?? '—'}
+                        </span>
+                        <span className="num-mono ml-1 text-[10px] text-zinc-500">
+                          {r.actual_return != null ? `（${r.actual_return > 0 ? '+' : ''}${r.actual_return.toFixed(2)}%）` : ''}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-zinc-600">等待评价</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    {!hit ? <span className="text-zinc-700">—</span> : isHit ? <span className="text-down">✓</span> : <span className="text-up">✗</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       )}
     </Card>
   );
@@ -931,6 +1050,7 @@ export default function FundDetail() {
         {tab === '风险指标' && <RiskTab code={code} history={history.data} />}
         {tab === '持仓' && <HoldingsTab code={code} />}
         {tab === 'AI分析' && <AiAnalysisTab code={code} />}
+        {tab === '预测历史' && <PredictionHistoryTab code={code} />}
         {tab === '新闻' && <FundNewsTab code={code} />}
         {tab === '政策' && <FundPolicyTab />}
         {tab === 'AI对话' && (
