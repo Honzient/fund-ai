@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 backend/.venv/
 *.db
+*.db-wal
+*.db-shm
 backend/fund.db
 backend/storage/
 backend/logs/
